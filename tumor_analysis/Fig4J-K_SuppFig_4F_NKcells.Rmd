@@ -1,0 +1,308 @@
+---
+title: "Fig4_NKcells"
+output: html_document
+date: "2025-04-22"
+---
+
+```{r}
+library(Seurat)
+library(tidyr)
+library(dplyr)
+library(tibble)
+library(ggplot2)
+library(ggnewscale)
+library(gghalves)
+library(ggpubr) # needs cmake
+library(scales)
+library(harmony)
+library(patchwork)
+library(stringr)
+library(forcats)
+```
+
+
+# Define functions
+```{r}
+# Define a function to run UMAP
+create_UMAP <- function(seurat_obj, sample_name, num_pcs, res = 0.25, reduction = "pca", umap_dir = "~/results/dimreduction/umap/", processed_data_dir = "~/processed_data/") {
+
+  # Find neighbors and clusters
+  seurat_obj <- FindNeighbors(seurat_obj, dims = 1:num_pcs, reduction = reduction)
+  seurat_obj <- FindClusters(seurat_obj, resolution = res)
+  
+  # Print cluster assignments for verification
+  print(paste("Clusters for", sample_name, ":"))
+  print(head(Idents(seurat_obj)))
+  
+  # Run UMAP
+  seurat_obj <- RunUMAP(seurat_obj, dims = 1:num_pcs, reduction = reduction)
+
+  # Save UMAP plots with different groupings
+  p1 <- DimPlot(seurat_obj, reduction = "umap", group.by = "seurat_clusters", label = TRUE)
+
+  print(p1)
+
+  # Print message indicating completion
+  print(paste("UMAP and clustering completed and files saved for:", sample_name))
+
+  # Return the updated Seurat object
+  return(seurat_obj)
+}
+```
+
+# read in tumor sc data
+```{r}
+srt_merge <- readRDS("~/processed_data/tumors_normalized_merged_scaled_dimreduction_annotated_srt.rds")
+
+# fix some cell type names
+srt_merge$cell_type_manual_refined <- gsub("cells", "cell", srt_merge$cell_type_manual_refined)
+srt_merge$cell_type_manual_refined[srt_merge$cell_type_manual_refined == "Proliferating myeloid cells"] <- "Cycling myeloid cell"
+srt_merge$cell_type_manual_refined[srt_merge$cell_type_manual_refined == "Proliferating T cell"] <- "Cycling lymphoid cell"
+srt_merge$cell_type_manual_refined[srt_merge$cell_type_manual_refined == "Ambiguous"] <- "Mixed lymphoid-myeloid"
+
+# look at cell types
+types <- srt_merge$cell_type_manual_refined %>% table() %>% names()
+
+# remove P16
+srt_merge <- subset(srt_merge, subset = orig.ident != "P16_Post_11907")
+
+# for formality, remove redo from orig ident and colnames
+srt_merge$orig.ident <- gsub("_redo", "", srt_merge$orig.ident)
+colnames(srt_merge) <- gsub("_redo", "", colnames(srt_merge))
+
+# fix sample labels for aesthetics. create as new labels for safety
+sample_name <- gsub("_[0-9]{5}$", "", srt_merge$orig.ident)
+sample_name <- gsub("_", " ", sample_name)
+srt_merge <- AddMetaData(srt_merge, sample_name, col.name = "sample_name")
+
+patient <- srt_merge@meta.data$sample_name %>% word()
+srt_merge <- AddMetaData(srt_merge, patient, col.name = "patient")
+
+Timepoint <- ifelse(grepl("Pre", srt_merge$sample_name), "Pre", "Post")
+srt_merge <- AddMetaData(srt_merge, Timepoint, col.name = "Timepoint")
+
+srt_merge$sample_name %>% table()
+srt_merge$Timepoint %>% table()
+srt_merge$patient %>% table()
+colnames(srt_merge)[1:5]
+```
+
+```{r}
+custom_colors <- c(
+  "P1 Pre"  = "orange",  
+  "P1 Post" = "#e97132", 
+  "P4 Pre"  = "lightgreen",  
+  "P4 Post" = "#196b24",  
+  "P7 Pre"  = "#0f9ed5",  
+  "P7 Post" = "#156082"   
+)
+```
+
+
+# Subset NK cells
+```{r}
+# subset to NK cells and rerun UMAP
+srt_merge_NK <- subset(srt_merge, subset = cell_type_manual_refined == "NK cell")
+
+srt_merge_NK <- FindVariableFeatures(srt_merge_NK, selection.method = "vst", nfeatures = 2000)
+srt_merge_NK <- ScaleData(srt_merge_NK, features = VariableFeatures(srt_merge_NK))
+srt_merge_NK <- RunPCA(srt_merge_NK, features = VariableFeatures(object = srt_merge_NK))
+
+ElbowPlot(srt_merge_NK)
+
+```
+
+Plot umap
+```{r}
+set.seed(1234)
+srt_merge_NK <- create_UMAP(srt_merge_NK, "merged_nk_cells", num_pcs = 9, res = 0.25)
+```
+
+# annotate nk cell subtypes
+```{r}
+NK_type <- srt_merge_NK@meta.data %>% 
+  mutate(NK_type = case_when(seurat_clusters == 1 ~ "CD56-Dim/CD16+",
+                             seurat_clusters %in% c(0, 2) ~ "CD56-Bright/CD16-",
+                             seurat_clusters == 3 ~ "other")) %>%
+  pull(NK_type)
+
+srt_merge_NK <- AddMetaData(srt_merge_NK, NK_type, "NK_type") 
+
+```
+
+# CHECKPOINT - save and reload NK cell seurat obj
+```{r}
+#saveRDS(srt_merge_NK, "~/processed_data/fig4_tumor_NK_only_type_annotated.rds")
+```
+
+```{r}
+srt_merge_NK <- readRDS("~/processed_data/fig4_tumor_NK_only_type_annotated.rds")
+```
+
+
+# find nk type markers
+```{r}
+umap_nk_markers <- FindAllMarkers(srt_merge_NK, group.by = "NK_type")
+
+topmarkers <- umap_nk_markers %>% 
+  group_by(cluster) %>%
+  slice_max(order_by = avg_log2FC, n = 20, with_ties = FALSE) %>%
+  ungroup()
+
+#write_tsv(topmarkers, "~/figures/fig4/FindAllMarkers_nk_cell_subtypes.tsv")
+```
+
+
+# add module scores for nk cell types - extended sigs
+```{r}
+CD16pos_CD56dim <- c("FCGR3A", "FGFBP2", "PRDM1", "CX3CR1", "CCL3", "CCL4, KIR3DL2", "KIR2DL3")
+CD16neg_CD56bri <- c("NCAM1", "XCL1", "XCL2", "GZMK", "KLRC1", "SELL", "GATA3")
+
+features <- list("CD16pos_CD56dim" = CD16pos_CD56dim,
+                 "CD16neg_CD56bri" = CD16neg_CD56bri)
+
+srt_merge_NK <- AddModuleScore(srt_merge_NK, features = features)
+colnames(srt_merge_NK@meta.data)[colnames(srt_merge_NK@meta.data) %in% c("Cluster1", "Cluster2")] <- c("CD16pos_CD56dim", "CD16neg_CD56bri")
+srt_merge_NK@meta.data
+```
+
+# Supp Fig5 F - CD56DimCD16+/CD56BrightCD16- Signature score over umap
+```{r}
+cols = c("#3c78b5", "#fdfab8", "#be2448")
+p1 <- FeaturePlot(srt_merge_NK, features = "CD16pos_CD56dim", raster = FALSE) + 
+  scale_color_gradientn(colors = cols, name = "Mean scaled expression") +
+  ggtitle(label = "CD56-Dim/CD16-Pos Signature")
+
+
+p2 <- FeaturePlot(srt_merge_NK, features = "CD16neg_CD56bri", raster = FALSE) + 
+  scale_color_gradientn(colors = cols, name = "Mean scaled expression") +
+  ggtitle(label = "CD16-Neg/CD56-Bright Signature")
+
+#ggsave(filename = "~/figures/fig4/SuppFig5X_FeaturePlotCD16pos_CD56dim_big_sig.pdf", plot = p1, width = 8, height = 5.5)
+#ggsave(filename = "~/figures/fig4/SuppFig5X_FeaturePlotCD16neg_CD56bri_big_sig.pdf", plot = p2, width = 8, height = 5.5)
+
+p1
+p2
+```
+
+# dotplot for expresssion of sigs by nk type
+```{r}
+greenpurple <- c("#036300", "white", "#68228b")
+
+#Dotplot for CD56-Bright/CD56-Dim
+features <- c(CD16pos_CD56dim, CD16neg_CD56bri)
+features <- factor(features, levels = features)
+
+srt_merge_NK_sub <- subset(srt_merge_NK, subset = NK_type != "other")
+
+plot <- DotPlot(srt_merge_NK_sub, features = features, group.by = "NK_type") +
+  scale_color_gradientn(colors = greenpurple) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+#ggsave("~/figures/fig4/Fig4D_DotPlot_CD56DCD16P_CD56BCD16N_green_purple.pdf", plot = plot, width = 8, height = 3.5)
+plot
+```
+
+
+```{r}
+# get cell counts for timepoint and make new metadata column
+
+# Count number of cells per group
+cell_counts <- table(srt_merge_NK$Timepoint)
+
+# Create a named vector of labels with counts
+label_with_counts <- paste0(names(cell_counts), " (", cell_counts, ")")
+names(label_with_counts) <- names(cell_counts)
+
+# Add a new metadata column with those labels
+counted_cells <- label_with_counts[match(srt_merge_NK$Timepoint, names(label_with_counts))]
+names(counted_cells) <- colnames(srt_merge_NK)
+
+srt_merge_NK <- AddMetaData(srt_merge_NK, metadata = counted_cells, col.name = "timepoint_with_counts")
+srt_merge_NK$timepoint_with_counts %>% table()
+```
+
+```{r}
+tp_cols <- c(
+  "Pre (477)" = "#A6BD8C", 
+  "Post (285)" = "firebrick4")
+
+srt_merge_NK$timepoint_with_counts <- factor(srt_merge_NK$timepoint_with_counts, 
+                                                levels = names(tp_cols))
+```
+
+# Fig 4J plot pre/post cells over umap
+```{r}
+p1 <- DimPlot(srt_merge_NK, group.by = "timepoint_with_counts", cols = tp_cols, raster = FALSE)
+#ggsave(filename = "~/figures/fig4/Fig4I_UMAP_NKcells_by_timepoint.pdf", plot = p1, width = 8, height = 5.5)
+p1
+```
+
+
+# calculate ratio of cytox to sig NK cells - Tumor
+```{r}
+NK_type_fraction_by_sample <- srt_merge_NK@meta.data %>%
+  group_by(sample_name, NK_type) %>%
+  summarize(n = n(), .groups = "drop") %>%
+  pivot_wider(names_from = NK_type, values_from = n, values_fill = 0) %>%
+  mutate(ratio = `CD56-Dim/CD16+`/`CD56-Bright/CD16-`)
+
+desired_order_samples <- c("P1 Pre", "P1 Post", "P4 Pre", "P4 Post", "P7 Pre", "P7 Post")
+NK_type_fraction_by_sample$sample_name <- factor(NK_type_fraction_by_sample$sample_name, levels = desired_order_samples)
+
+NK_type_fraction_by_sample$timepoint <- ifelse(grepl("Pre", NK_type_fraction_by_sample$sample_name), "Pre-infusion", "Post-infusion")
+NK_type_fraction_by_sample$timepoint <- factor(NK_type_fraction_by_sample$timepoint, levels = c("Pre-infusion", "Post-infusion"))
+
+NK_type_fraction_by_sample$patient <- word(NK_type_fraction_by_sample$sample_name, 1)
+NK_type_fraction_by_sample$patient <- factor(NK_type_fraction_by_sample$patient, levels = c("P1", "P4", "P7"))
+```
+
+
+
+# Fig 4I: plot NK subtype ratio for tumor by timepoint with lines, dots, bar
+```{r}
+plot_ratio_by_timepoint <- function(df, title_text, order) {
+  # Compute mean per timepoint
+  mean_df <- df %>%
+    group_by(timepoint) %>%
+    summarise(mean_ratio = mean(ratio, na.rm = TRUE), .groups = "drop")
+  
+  ggplot(df, aes(x = timepoint, y = ratio)) +
+    geom_col(data = mean_df, aes(x = timepoint, y = mean_ratio), 
+             fill = "gray30", width = 0.6, alpha = 0.5) +
+    
+    geom_point(data = df, aes(x = timepoint, y = ratio, color = patient), 
+               size = 2) +
+    
+    geom_line(data = df, aes(x = timepoint, y = ratio, group = patient, color = patient), 
+              linewidth = 0.7, alpha = 0.6) +
+
+    scale_color_manual(values = c("P1" = "#e97132", 
+                                  "P4" = "#196b24", 
+                                  "P7" = "#0f9ed5")) +
+    
+    labs(x = "Timepoint", y = "CD56Dim / CD56Bright Ratio", 
+         title = title_text) +
+    theme_bw() +
+    theme(panel.grid = element_blank(),
+          axis.text.x = element_text(angle = 45, hjust = 1))
+}
+
+```
+
+
+```{r}
+
+p_Tumor <- plot_ratio_by_timepoint(NK_type_fraction_by_sample, "Tumor NK Subtype Ratio  Across Timepoints") +
+  stat_compare_means(data = NK_type_fraction_by_sample, 
+                       mapping = aes(x = timepoint, y = ratio),  
+                       method = "t.test", comparisons = list(c("Pre-infusion", "Post-infusion")), 
+                       label = "p.format", hide.ns = FALSE) 
+
+# Save 
+#ggsave("~/figures/fig4/Fig4I_Tumor_ratio_plot.pdf", plot = p_Tumor, width = 5, height = 8)
+
+# Display
+p_Tumor
+
+```
+

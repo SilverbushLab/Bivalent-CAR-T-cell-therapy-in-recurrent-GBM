@@ -1,0 +1,137 @@
+---
+title: "E17_dimreduction_script2"
+output: html_document
+date: "2024-12-25"
+---
+
+Perform dim reduction on myelin depleted and control GBMs from script 1. Input is processed/filtered seurat objects from script 1. Output is dimensional reduction plots and corresponding seurat objects for cell state scoring and plotting. This is SCRIPT 2 of the pipeline.
+
+```{r}
+library(Seurat)
+library(dplyr)
+library(ggplot2)
+library(readr)
+```
+
+
+# Run UMAP
+```{r}
+
+# Define a function to run UMAP
+create_UMAP <- function(seurat_obj, sample_name, num_pcs, res = 0.25, umap_dir = "~/results/dimreduction/umap/", processed_data_dir = "~/processed_data/") {
+
+  # Find neighbors and clusters
+  seurat_obj <- FindNeighbors(seurat_obj, dims = 1:num_pcs)
+  seurat_obj <- FindClusters(seurat_obj, resolution = res)
+  
+  # Print cluster assignments for verification
+  print(paste("Clusters for", sample_name, ":"))
+  print(head(Idents(seurat_obj)))
+  
+  # Run UMAP
+  seurat_obj <- RunUMAP(seurat_obj, dims = 1:num_pcs)
+
+  # Save UMAP plots with different groupings
+  p1 <- DimPlot(seurat_obj, reduction = "umap", group.by = "seurat_clusters", label = TRUE)
+  ggsave(filename = file.path(umap_dir, paste0("UMAP_", sample_name, "_seurat_clusters.jpg")),
+         plot = p1, dpi = 150, height = 10, width = 10)
+
+  p2 <- DimPlot(seurat_obj, reduction = "umap", group.by = "cell_type_coarse", label = TRUE)
+  ggsave(filename = file.path(umap_dir, paste0("UMAP_", sample_name, "_cell_type_coarse.jpg")),
+         plot = p2, dpi = 150, height = 10, width = 16)
+
+
+  # Save the processed Seurat object
+  #saveRDS(seurat_obj, file.path(processed_data_dir, paste0(sample_name, "_processed_dimreduction.rds")))
+  print(p1)
+
+  # Print message indicating completion
+  print(paste("UMAP and clustering completed and files saved for:", sample_name))
+
+  # Return the updated Seurat object
+  return(seurat_obj)
+}
+```
+
+
+#import filtered/preprocessed seurat objects
+only do this if necessary bc it takes a long time.
+```{r}
+srt_merge <- readRDS("~/processed_data/tumors_normalized_merged_scaled_srt.rds")
+```
+
+
+```{r}
+# Set seed so UMAP runs the same every time. Do it before PCA just in case.
+set.seed(1234)
+```
+
+
+```{r}
+# Define results directory
+dimreduction_dir <- "~/results/dimreduction/pca/"
+sample <- "tumor_merged_filtered_processed"
+
+# Create directory if it doesn't exist
+if (!dir.exists(dimreduction_dir)) {
+  dir.create(dimreduction_dir, recursive = TRUE)
+}
+
+# Run PCA
+srt_merge <- RunPCA(srt_merge, features = VariableFeatures(object = srt_merge))
+  
+# Print PCA summary for first 5 PCs
+print(srt_merge[["pca"]], dims = 1:5, nfeatures = 5)
+  
+# Save PCA loadings plot
+p1 <- VizDimLoadings(srt_merge, dims = 1:4)
+ggsave(filename = file.path(dimreduction_dir, paste0("VizDimLoading_", sample, ".jpg")),
+       plot = p1, dpi = 300, height = 12, width = 12)
+  
+# Save PCA DimPlots colored by cell type annotations
+p2 <- DimPlot(srt_merge, reduction = "pca", group.by = "cell_type_fine")
+ggsave(filename = file.path(dimreduction_dir, paste0("PCA_", sample, "_celltype_fine.jpg")),
+        plot = p2, dpi = 300, height = 8, width = 24)
+
+p3 <- DimPlot(srt_merge, reduction = "pca", group.by = "cell_type_coarse")
+ggsave(filename = file.path(dimreduction_dir, paste0("PCA_", sample, "_celltype_coarse.jpg")),
+       plot = p3, dpi = 300, height = 12, width = 12)
+  
+# Save DimHeatmap for first 20 PCs
+png(file.path(dimreduction_dir, paste0("DimHeatmap_", sample, ".png")), 
+    width = 16, height = 20, units = "in", res = 150)
+DimHeatmap(srt_merge, dims = 1:20, cells = 500, balanced = TRUE)
+dev.off()
+  
+# Save ElbowPlot
+p4 <- ElbowPlot(srt_merge)
+print(p4)
+```
+From the elbowplot, ideal number of dimensions is:
+10
+
+
+```{r}
+# use the function for each object
+srt_merge <- create_UMAP(srt_merge, "merged_filtered_processed", res = 0.25, num_pcs =  15)
+saveRDS(srt_merge, "~/processed_data/tumors_normalized_merged_scaled_dimreduction_srt.rds")
+```
+
+```{r}
+out_dir <- "~/results/dimreduction/umap/"
+
+colnames(srt_merge@meta.data)
+
+DimPlot(srt_merge, reduction = "umap", group.by = "orig.ident")
+ggsave("~/results/dimreduction/umap/UMAP_merged_filtered_processed_by_sample.jpg",
+       width = 12, height = 10)
+FeaturePlot(srt_merge, reduction = "umap", features = "percent.mt")
+FeaturePlot(srt_merge, reduction = "umap", features = "nCount_RNA")
+FeaturePlot(srt_merge, reduction = "umap", features = "nFeature_RNA")
+
+DimPlot(srt_merge, reduction = "umap", group.by = "cell_type_coarse")
+ggsave("~/results/dimreduction/umap/UMAP_merged_filtered_processed_by_cellranger_annot.jpg",
+       width = 12, height = 10)
+
+```
+

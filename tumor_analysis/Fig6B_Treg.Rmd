@@ -1,0 +1,145 @@
+---
+title: "E20_Script7_CellTypeExploration"
+output: html_document
+date: "2025-04-07"
+---
+
+```{r}
+library(Seurat)
+library(tidyr)
+library(dplyr)
+library(ggplot2)
+library(ggnewscale)
+library(gghalves)
+library(ggpubr)
+library(scales)
+library(harmony)
+library(scCustomize)
+```
+
+# read in tumor sc data
+```{r}
+srt_merge <- readRDS("~/processed_data/tumors_normalized_merged_scaled_dimreduction_annotated_srt.rds")
+
+# fix some cell type names
+srt_merge$cell_type_manual_refined[srt_merge$cell_type_manual_refined == "Proliferating myeloid cells"] <- "Cycling myeloid cell"
+srt_merge$cell_type_manual_refined[srt_merge$cell_type_manual_refined == "Proliferating T cell"] <- "Cycling lymphoid cell"
+srt_merge$cell_type_manual_refined[srt_merge$cell_type_manual_refined == "Ambiguous"] <- "Mixed lymphoid-myeloid"
+
+# look at cell types
+types <- srt_merge$cell_type_manual_refined %>% table() %>% names()
+
+# remove P16
+srt_merge <- subset(srt_merge, subset = orig.ident != "P16_Post_11907")
+
+# for formality, remove redo from orig ident and colnames
+srt_merge$orig.ident <- gsub("_redo", "", srt_merge$orig.ident)
+colnames(srt_merge) <- gsub("_redo", "", colnames(srt_merge))
+
+# fix sample labels for aesthetics. create as new labels for safety
+sample_name <- gsub("_[0-9]{5}$", "", srt_merge$orig.ident)
+sample_name <- gsub("_", " ", sample_name)
+srt_merge <- AddMetaData(srt_merge, sample_name, col.name = "sample_name")
+
+patient <- srt_merge@meta.data$sample_name %>% word()
+srt_merge <- AddMetaData(srt_merge, patient, col.name = "patient")
+
+Timepoint <- ifelse(grepl("Pre", srt_merge$sample_name), "Pre", "Post")
+srt_merge <- AddMetaData(srt_merge, Timepoint, col.name = "Timepoint")
+srt_merge$sample_name %>% table()
+```
+
+# look at Treg numbers
+```{r}
+# plot number of Tregs
+
+meta <- srt_merge@meta.data
+meta$orig.ident
+
+immune_cell_types <- c()
+
+tregs <- meta %>% 
+  group_by(orig.ident) %>%
+  summarize(nCells = n(),
+            nTregs = sum(cell_type_manual_refined == "Regulatory T cell"),
+            fractionTreg = nTregs/nCells)
+
+
+tregs
+```
+
+# Plot immune cell types of interest by patient as a fraction of total immune cells
+Look at immune cell types of interest as a fraction of total immune cells
+```{r}
+cell_types_of_interest <- c("CD8 T cell", "Regulatory T cell", "NK cell")
+immune_cell_types <- c("Plasma cell", "CD4 T cell", "CD8 T cell", "Regulatory T cell", "Cycling lymphoid cell", "NK cell", "Monocyte", "Macrophage", "pDC", "Cycling myeloid cell")
+desired_order_samples <- c("P1 Pre","P1 Post",
+                           "P4 Pre", "P4 Post",
+                           "P7 Pre", "P7 Post")
+
+meta <- srt_merge@meta.data
+# plot cell types of interest as fraction of immune cells -------------
+
+#get total immune cell counts per sample
+total_immune_counts <- meta %>%
+  filter(cell_type_manual_refined %in% immune_cell_types) %>%
+  group_by(sample_name) %>%
+  summarise(total_immune_cells = n(), .groups = "drop")
+
+# get treg composition
+composition_df <- meta %>%
+  filter(cell_type_manual_refined == "Regulatory T cell") %>%
+  group_by(sample_name, cell_type_manual_refined) %>%
+  summarise(n = n(), .groups = "drop") %>%
+  left_join(total_immune_counts, by = "sample_name") %>%
+  mutate(fraction = n / total_immune_cells)
+
+
+# add timepoint and patient
+composition_df$patient <- word(composition_df$sample_name, 1)
+composition_df$timepoint <- word(composition_df$sample_name, 2)
+```
+
+```{r}
+
+plot_fraction_by_timepoint <- function(df, title_text) {
+  # Compute mean per timepoint
+  mean_df <- df %>%
+    group_by(timepoint) %>%
+    summarise(mean_fraction = mean(fraction, na.rm = TRUE), .groups = "drop")
+  
+  ggplot(df, aes(x = timepoint, y = fraction)) + 
+    geom_col(data = mean_df, aes(x = timepoint, y = mean_fraction), 
+             inherit.aes = FALSE, fill = "gray30", width = 0.6, alpha = 0.5) +
+    
+    geom_point(aes(color = patient), size = 2) +
+    geom_line(aes(group = patient, color = patient), linewidth = 0.7, alpha = 0.6) +
+    
+    scale_color_manual(values = c("P1" = "#e97132", 
+                                  "P4" = "#196b24", 
+                                  "P7" = "#0f9ed5")) +
+    
+    labs(x = "Timepoint", y = "fraction of immune cells", 
+         title = title_text) +
+    theme_bw() +
+    theme(panel.grid = element_blank(),
+          axis.text.x = element_text(angle = 45, hjust = 1))
+}
+
+
+```
+
+# Fig 6B - plot Tregs as fraction of immune cells
+```{r}
+composition_df$timepoint <- factor(composition_df$timepoint, levels = c("Pre", "Post"))
+
+p <- plot_fraction_by_timepoint(composition_df, "Regulatory T cells as fraction immune cells by timepoint") +
+      stat_compare_means(data = composition_df, 
+                       mapping = aes(x = timepoint, y = fraction),  
+                       method = "t.test", comparisons = list(c("Pre", "Post")), 
+                       label = "p.format", hide.ns = FALSE) 
+
+#ggsave("~/figures/fig6/Fig6B_Treg_fraction_of_immune_cells_per_sample_bar_line_dot.pdf", plot =p, width = 5, height = 8)
+p
+```
+

@@ -1,0 +1,1147 @@
+---
+title: "Figure3"
+output: html_document
+date: "2025-04-18"
+---
+
+```{r}
+library(Seurat)
+library(tidyr)
+library(ggplot2)
+library(ggpubr)
+library(dplyr)
+library(harmony)
+library(purrr)
+library(cowplot)
+library(rstatix)
+library(ggbeeswarm)
+```
+
+
+# Functions
+```{r}
+# Define a function to run UMAP
+create_UMAP <- function(seurat_obj, sample_name, num_pcs, res = 0.25, reduction = "pca", umap_dir = "~/figures/fig3/", processed_data_dir = "~/processed_data/") {
+
+  # Find neighbors and clusters
+  seurat_obj <- FindNeighbors(seurat_obj, dims = 1:num_pcs)
+  seurat_obj <- FindClusters(seurat_obj, resolution = res)
+  
+  # Print cluster assignments for verification
+  print(paste("Clusters for", sample_name, ":"))
+  print(head(Idents(seurat_obj)))
+  
+  # Run UMAP
+  seurat_obj <- RunUMAP(seurat_obj, dims = 1:num_pcs, reduction = reduction)
+
+  # Print message indicating completion
+  print(paste("UMAP and clustering completed for:", sample_name))
+
+  # Return the updated Seurat object
+  return(seurat_obj)
+}
+```
+
+
+```{r}
+
+plot_marker_umaps <- function(seurat_obj, marker_csv, samplename = "sample", path_out = "~/figures/fig3/") {
+  # Load marker gene list
+  marker_df <- read_csv(marker_csv)
+  
+  # Validate columns
+  if (!all(c("cell_type", "marker") %in% colnames(marker_df))) {
+    stop("CSV must contain 'cell_type' and 'marker' columns")
+  }
+  
+  # Drop NA or blank marker entries
+  marker_df <- marker_df[!is.na(marker_df$marker) & marker_df$marker != "", ]
+  
+  plot_list <- list()
+
+  # First: Add UMAP with Seurat cluster identity
+  cluster_plot <- DimPlot(seurat_obj, reduction = "umap", label = TRUE, pt.size = 0.5) +
+    ggtitle("Clusters")
+  plot_list[[1]] <- cluster_plot
+
+  # Then: Add FeaturePlots for each marker
+  for (i in seq_len(nrow(marker_df))) {
+    marker <- marker_df$marker[i]
+    cell_type <- marker_df$cell_type[i]
+    
+    if (marker %in% rownames(seurat_obj)) {
+      p <- FeaturePlot(seurat_obj, features = marker, reduction = "umap", pt.size = 0.25, order = TRUE) +
+        ggtitle(paste0(cell_type, ": ", marker))
+    } else {
+      p <- ggplot() + 
+        theme_void() + 
+        ggtitle(paste0(cell_type, ": ", marker, " (not found)"))
+    }
+    plot_list[[i + 1]] <- p  # shift index by 1 to account for cluster plot
+  }
+  
+  # Layout: adjust ncol to control grid width
+  ncol <- 6
+  nrow <- ceiling(length(plot_list) / ncol)
+  final_plot <- wrap_plots(plotlist = plot_list, ncol = ncol)
+  
+  # Save
+  #jpg_filename <- paste0(path_out, samplename, ".jpg")
+  pdf_filename <- paste0(path_out, samplename, ".pdf", device = cairo_pdf())
+  ggsave(pdf_filename, final_plot, width = 4 * ncol, height = 3 * nrow)
+  
+  print(final_plot)
+  
+  message("Saved plot to: ", pdf_filename)
+}
+```
+
+
+# import and format seurat object
+```{r}
+srt_merge <- readRDS("~/processed_data/tumors_normalized_merged_scaled_dimreduction_annotated_srt.rds")
+#srt_merge <- readRDS("~/Dropbox (PennNeurosurgery)/SilverbushLab/Projects/E20_tumor_analysis/processed_data/tumors_normalized_merged_scaled_dimreduction_annotated_srt.rds")
+# fix cell names
+srt_merge$cell_type_manual_refined <- gsub("cells", "cell", srt_merge$cell_type_manual_refined)
+srt_merge$cell_type_manual_refined[srt_merge$cell_type_manual_refined == "Proliferating myeloid cell"] <- "Cycling myeloid cell"
+srt_merge$cell_type_manual_refined[srt_merge$cell_type_manual_refined == "Proliferating T cell"] <- "Cycling T cell"
+srt_merge$cell_type_manual_refined[srt_merge$cell_type_manual_refined == "Ambiguous"] <- "Mixed lymphoid-myeloid"
+
+# check cell names
+srt_merge$cell_type_manual_refined %>% table()
+```
+
+
+```{r}
+# filter to desired samples
+srt_merge <- subset(srt_merge, orig.ident != "P16_Post_11907")
+
+# for formality, remove redo from orig ident and colnames
+srt_merge$orig.ident <- gsub("_redo", "", srt_merge$orig.ident)
+colnames(srt_merge) <- gsub("_redo", "", colnames(srt_merge))
+
+srt_merge$orig.ident %>% table()
+colnames(srt_merge)[srt_merge$orig.ident == "P7_Post_11517"][1:10]
+
+# fix sample labels for aesthetics. create as new column for safety
+sample_name <- gsub("_[0-9]{5}$", "", srt_merge$orig.ident)
+sample_name <- gsub("_", " ", sample_name)
+srt_merge <- AddMetaData(srt_merge, sample_name, col.name = "sample_name")
+
+patient <- srt_merge@meta.data$sample_name %>% word()
+srt_merge <- AddMetaData(srt_merge, patient, col.name = "patient")
+
+Timepoint <- ifelse(grepl("Pre", srt_merge$sample_name), "Pre", "Post")
+srt_merge <- AddMetaData(srt_merge, Timepoint, col.name = "Timepoint")
+srt_merge$sample_name %>% table()
+```
+
+```{r}
+DimPlot(srt_merge)
+```
+
+
+# create custom cell colors
+```{r}
+cell_types <- unique(srt_merge@meta.data$cell_type_manual_refined)
+custom_colors <- scales::hue_pal()(length(cell_types))
+names(custom_colors) <- cell_types
+custom_colors["Malignant"] <- "darkred"  # override one color
+
+
+# and order
+desired_order_celltypes <- c("Malignant", "Neuron", "Glial cell", "Plasma cell", "CD4 T cell", "CD8 T cell", "Regulatory T cell", "Cycling T cell", "NK cell", "Macrophage", "Monocyte", "pDC", "Cycling myeloid cell", "Endothelial", "Mixed lymphoid-myeloid")
+
+# make sure cell types in order vector and srt obj match
+all(cell_types %in% desired_order_celltypes)
+cell_types[!cell_types %in% desired_order_celltypes]
+
+patient_colors <- c(
+  "P1 Pre"  = "orange",  
+  "P1 Post" = "#e97132", 
+  "P4 Pre"  = "lightgreen",  
+  "P4 Post" = "#196b24",  
+  "P7 Pre"  = "#0f9ed5",  
+  "P7 Post" = "#156082"   
+)
+
+```
+
+
+# set up colors
+```{r}
+named_colors_tumor <- c(
+  "Malignant"              = "#B22222", # Tumor-exclusive cell types
+  "CD4 T cell"             = "#A6CEE3", # CSF-overlapping cell types
+  "CD8 T cell"             = "#B294C7", # CSF-overlapping cell types
+  "Cycling T cell"         = "#C7B699", # CSF-overlapping cell types
+  "Regulatory T cell"      = "#52AF43", # CSF-overlapping cell types
+  "NK cell"                = "#E6CB75", # CSF-overlapping cell types
+  "Macrophage"             = "#4992C2", # CSF-overlapping cell types
+  "Monocyte"               = "#F68181", # CSF-overlapping cell types
+  "pDC"                    = "#70449D", # CSF-overlapping cell types
+  "Cycling myeloid cell"   = "#E6AB02", # Tumor-exclusive cell types
+  "Plasma cell"            = "#AADB84", # CSF-overlapping cell types
+  "Mixed lymphoid-myeloid" = "#4DAF4A", # Tumor-exclusive cell types
+  "Glial cell"             = "#984EA3", # Tumor-exclusive cell types
+  "Neuron"                 = "#377EB8", # Tumor-exclusive cell types
+  "Endothelial"            = "#FF69B4" # Tumor-exclusive cell types
+)
+
+```
+
+
+```{r}
+# Set seed so UMAP runs the same every time. 
+set.seed(1234)
+```
+
+
+```{r}
+# Define results directory
+
+# Find Variable Veatures
+srt_merge <- FindVariableFeatures(srt_merge, selection.method = "vst", nfeatures = 2000)
+
+# Run PCA
+srt_merge <- RunPCA(srt_merge, features = VariableFeatures(object = srt_merge))
+
+# Save ElbowPlot
+plot <- ElbowPlot(srt_merge)
+print(plot)
+```
+From the elbowplot, ideal number of dimensions is:
+10
+
+
+```{r}
+#Run UMAP
+set.seed(1234)
+sample <- "tumor_merged_filtered_processed_fig3A"
+srt_merge <- create_UMAP(srt_merge, sample_name = sample, reduction = "pca", num_pcs = 10, res = 0.25)
+```
+
+
+
+
+
+```{r}
+# set up batches:
+batches <- case_when(srt_merge$sample_name == "P7 Post" ~ "Library batch 1",
+                     srt_merge$sample_name == "P7 Pre" ~ "Library batch 2",
+                     srt_merge$sample_name %in% c("P4 Pre", "P4 Post") ~ "Library batch 3",
+                     srt_merge$sample_name %in% c("P1 Pre", "P1 Post") ~ "Library batch 4")
+ 
+srt_merge <- AddMetaData(srt_merge, batches, col.name = "batch")
+```
+
+
+
+# checkpoint - save and reload fig 3 tumor umap
+```{r}
+#saveRDS(srt_merge, "~/processed_data/tumors_fig_3_processed_with_umap_reduction.rds")
+```
+
+```{r}
+# option to start from here
+srt_merge <- readRDS("~/processed_data/tumors_fig_3_processed_with_umap_reduction.rds")
+#srt_merge <- readRDS("~/Dropbox (PennNeurosurgery)/SilverbushLab/Projects/E20_tumor_analysis/processed_data/tumors_fig_3_processed_with_umap_reduction.rds")
+
+# make sure to check the umap
+DimPlot(srt_merge)
+```
+
+
+# Fig 3B,C - all tumor cell UMAP
+Fig. 3B: UMAP of single-nucleus transcriptomes from matched pre- and post-treatment GBM tissues across three patients.
+```{r}
+# get cell counts for types and make new metadata column
+# Count number of cells per group
+cell_counts <- table(srt_merge$cell_type_manual_refined)
+
+# Create a named vector of labels with counts
+label_with_counts <- paste0(names(cell_counts), " (", cell_counts, ")")
+names(label_with_counts) <- names(cell_counts)
+label_with_counts
+# Add a new metadata column with those labels
+counted_cells <- label_with_counts[match(srt_merge$cell_type_manual_refined, names(label_with_counts))]
+names(counted_cells) <- colnames(srt_merge)
+srt_merge <- AddMetaData(srt_merge, metadata = counted_cells, col.name = "cell_type_with_counts")
+
+
+srt_merge$cell_type_with_counts[1:10]
+```
+
+
+```{r}
+# set up colors
+named_colors_tumor <- c(
+  "Malignant (27334)"              = "#B22222",
+  "CD4 T cell (2431)"              = "#A6CEE3",
+  "CD8 T cell (3598)"              = "#B294C7",
+  "Cycling lymphoid cell (67)"     = "#C7B699",
+  "Regulatory T cell (180)"        = "#52AF43",
+  "NK cell (762)"                  = "#E6CB75",
+  "Macrophage (11582)"             = "#4992C2",
+  "Monocyte (3913)"                = "#F68181",
+  "pDC (106)"                      = "#70449D",
+  "Cycling myeloid cell (329)"     = "#E6AB02",
+  "Plasma cell (73)"               = "#AADB84",
+  "Mixed lymphoid-myeloid (470)"   = "#4DAF4A",
+  "Glial cell (9839)"              = "#984EA3",
+  "Neuron (85)"                    = "#377EB8",
+  "Endothelial (254)"              = "#FF69B4"
+)
+
+```
+
+
+```{r}
+# get cell counts for samples and make new metadata column
+# Count number of cells per group
+cell_counts <- table(srt_merge$sample_name)
+# Create a named vector of labels with counts
+label_with_counts <- paste0(names(cell_counts), " (", cell_counts, ")")
+names(label_with_counts) <- names(cell_counts)
+label_with_counts
+# Add a new metadata column with those labels
+counted_cells <- label_with_counts[match(srt_merge$sample_name, names(label_with_counts))]
+names(counted_cells) <- colnames(srt_merge)
+
+srt_merge <- AddMetaData(srt_merge, metadata = counted_cells, col.name = "sample_name_with_counts")
+
+srt_merge$sample_name_with_counts %>% table()
+```
+
+```{r}
+patient_colors <- c(
+  "P1 Pre (17397)"  = "orange",  
+  "P1 Post (2602)" =  "#e97132", 
+  "P4 Pre (12375)"  = "lightgreen",  
+  "P4 Post (1553)"  = "#196b24",  
+  "P7 Pre (12920)"  = "#0f9ed5",  
+  "P7 Post (14176)" = "#156082"   
+)
+```
+
+
+```{r}
+# factor for order
+srt_merge$cell_type_with_counts <- factor(srt_merge$cell_type_with_counts,
+                                             levels = names(named_colors_tumor))
+
+srt_merge$sample_name_with_counts <- factor(srt_merge$sample_name_with_counts, 
+                                            levels = names(patient_colors))
+```
+
+
+```{r}
+plot1 <- DimPlot(srt_merge, group.by = "seurat_clusters", label = TRUE, raster = FALSE) + 
+  ggtitle("Paired tumors pre and post CAR T cell infusion")
+
+plot2 <- DimPlot(srt_merge, group.by = "cell_type_manual_refined", raster = FALSE) + 
+  ggtitle("Paired tumors pre and post CAR T cell infusion by cell type")
+
+plot3 <- DimPlot(srt_merge, group.by = "sample_name_with_counts", label = TRUE, raster = FALSE,
+                 cols = patient_colors) + 
+  ggtitle("Paired tumors pre and post CAR T cell infusion")
+
+plot4 <- DimPlot(srt_merge, group.by = "Timepoint", label = FALSE) + 
+  ggtitle("Paired tumors pre and post CAR T cell infusion by infusion")
+
+plot5 <- DimPlot(srt_merge, group.by = "cell_type_with_counts", 
+                  cols = named_colors_tumor, raster = FALSE) +
+  ggtitle("Paired tumors pre and post CAR T cell infusion by cell type")
+
+#ggsave(filename = "~/figures/fig3/Tumors_merged_UMAP_colored_by_cluster.pdf", plot = plot1, width = 14, height = 10)
+#ggsave(filename = "~/figures/fig3/Fig3C_Tumors_merged_UMAP_colored_by_sample.pdf", plot = plot3, width = 14, height = 10)
+#ggsave(filename = "~/figures/fig3/Tumors_merged_UMAP_colored_by_infusion.pdf", plot = plot4, width = 14, height = 10)
+#ggsave(filename = "~/figures/fig3/Fig3B_Tumors_merged_UMAP_colored_by_celltype_unifiedcols.pdf", plot = plot5, width = 14, height = 10)
+
+plot1
+plot2
+plot3
+plot4
+plot5
+```
+
+```{r}
+# establish sample order again. important for next plot as lacks cell count
+patient_colors <- c(
+  "P1 Pre"  = "orange",  
+  "P1 Post" = "#e97132", 
+  "P4 Pre"  = "lightgreen",  
+  "P4 Post" = "#196b24",  
+  "P7 Pre"  = "#0f9ed5",  
+  "P7 Post" = "#156082"   
+)
+```
+
+
+#Supp Fig 4F: plot sample-wise cell type composition
+```{r}
+# Extract metadata
+meta <- srt_merge@meta.data
+
+# Create a summary table with proportions
+composition_df <- meta %>%
+  group_by(sample_name, cell_type_with_counts) %>% # make a separate dataframe for each unique combination of values of orig.ident and cell_type_manual and sends to...
+  summarise(n = n()) %>% # this counts up the number of entries (cells) for each combination and outputs them in a new column "n"
+  ungroup() %>%
+  group_by(sample_name) %>% # for each value of sample_name
+  mutate(proportion = n/sum(n)) # for each value of cell type, give (count of that cell type)/(count of all cell types)
+
+composition_df$cell_type_with_counts <- factor(composition_df$cell_type_with_counts, levels = names(named_colors_tumor))
+composition_df$sample_name <- factor(composition_df$sample_name, levels = names(patient_colors))
+
+# Plot
+p <- ggplot(composition_df, aes(x = sample_name, y = proportion, fill = cell_type_with_counts)) +
+  geom_bar(stat = "identity") +
+  scale_fill_manual(values = named_colors_tumor) +
+  ylab("Proportion of Cells") +
+  xlab("Sample") +
+  labs(fill = "Cell Type") +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "right",
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank()
+  ) 
+
+#ggsave(plot = p, filename = "~/figures/fig3/SuppFig3X_tumor_cell_types_stacked_barplot.pdf", width = 5, height = 5)
+#ggsave(plot = p, filename = "~/Dropbox (PennNeurosurgery)/SilverbushLab/Projects/E20_tumor_analysis/figures/fig3/Fig3X_tumor_cell_types_stacked_barplot.pdf", width = 5, height = 5)
+p
+```
+
+# plot T cell types by timepoint
+```{r}
+# set up colors
+tcell_colors <- c(
+  "CD4 T cell"              = "#A6CEE3",
+  "CD8 T cell"              = "#B294C7",
+  "Regulatory T cell"        = "#52AF43"
+)
+
+```
+
+```{r}
+# set up colors
+myeloid_colors <- c(
+  "Macrophage"           = "#4992C2",
+  "Monocyte"             = "#F68181",
+  "pDC"                  = "#70449D"
+)
+
+```
+
+```{r}
+immune_cells <- c(
+  "CD4 T cell", "CD8 T cell", "Cycling lymphoid cell", "Regulatory T cell", "NK cell", "Macrophage", "Monocyte","pDC", "Cycling myeloid cell", "Plasma cell", "Mixed lymphoid-myeloid"
+)
+```
+
+
+```{r}
+# Extract metadata
+meta <- srt_merge@meta.data
+
+immune_cells <- c(
+  "CD4 T cell", "CD8 T cell", "Cycling lymphoid cell", "Regulatory T cell", "NK cell", "Macrophage", "Monocyte","pDC", "Cycling myeloid cell", "Plasma cell", "Mixed lymphoid-myeloid")
+
+# Create a summary table with proportions
+composition_df <- meta %>%
+  filter(cell_type_manual_refined %in% immune_cells) %>%
+  group_by(Timepoint, cell_type_manual_refined) %>% # make a separate dataframe for each unique combination of values of timepoint and cell_type_manual and sends to...
+  summarise(n = n()) %>% # this counts up the number of entries (cells) for each combination and outputs them in a new column "n"
+  ungroup() %>%
+  group_by(Timepoint) %>% # for each value of sample_name
+  mutate(proportion = n/sum(n)) # for each value of cell type, give (count of that cell type)/(count of all cell types)
+
+composition_df$cell_type_manual_refined <- factor(composition_df$cell_type_manual_refined, levels = immune_cells)
+composition_df$Timepoint <- factor(composition_df$Timepoint, levels = c("Pre", "Post"))
+
+# Plot
+p1 <- ggplot(filter(composition_df, cell_type_manual_refined %in% names(tcell_colors)), aes(x = Timepoint, y = proportion, fill = cell_type_manual_refined)) +
+  geom_bar(stat = "identity") +
+  scale_fill_manual(values = tcell_colors) +
+  ylab("Proportion of Immune cells") +
+  xlab("Sample") +
+  labs(fill = "Cell Type") +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "right",
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank()
+  ) 
+
+p2 <- ggplot(filter(composition_df, cell_type_manual_refined %in% names(myeloid_colors)), aes(x = Timepoint, y = proportion, fill = cell_type_manual_refined)) +
+  geom_bar(stat = "identity") +
+  scale_fill_manual(values = myeloid_colors) +
+  ylab("Proportion of Immune cells") +
+  xlab("Sample") +
+  labs(fill = "Cell Type") +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "right",
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank()
+  ) 
+
+#ggsave(plot = p1, filename = "~/figures/fig3/Fig3_Tcell_stacked_barplot.pdf", width = 5, height = 7)
+#ggsave(plot = p2, filename = "~/figures/fig3/Fig3_myeloid_stacked_barplot.pdf", width = 5, height = 7)
+
+p1
+p2
+```
+
+
+# Supp Table 3 - tumor sample characteristics
+```{r}
+srt_merge$cell_type_manual_refined %>% unique() 
+immune_cell_types <- c("Macrophage", "Monocyte", "CD8 T cell", "CD4 T cell", "Regulatory T cell", "NK cell", "pDC",  "Cycling myeloid cell", "Cycling lymphoid cell", "Plasma cell", "Mixed lymphoid-myeloid")
+
+supptab3 <- srt_merge@meta.data %>%
+  group_by(sample_name) %>%
+  summarize(total_cell_count = n(),
+            nMalig = sum(cell_type_manual_refined == "Malignant"),
+            nImmune = sum(cell_type_manual_refined %in% immune_cell_types),
+            malig_immune_ratio = nMalig/nImmune
+            )
+supptab3
+#write_tsv(supptab3, "~/figures/supp_table_3.tsv")
+```
+
+
+# Tumors colored by batches
+```{r}
+# Plot
+DimPlot(srt_merge, group.by = "batch") +
+  ggtitle("UMAP: Tumor cells colored by library preparation batch")
+
+#ggsave("~/figures/fig3/SuppFig3B_TumorCells_colored_by_LP_batch.pdf", width = 8, height = 6)
+```
+# Supp Fig 4 -Tumors colored by batch
+```{r}
+# suppose we want separate plots for each batch
+umap_df <- as.data.frame(Embeddings(srt_merge, "umap")) %>%
+  rownames_to_column("cell_id") %>%
+  left_join(srt_merge@meta.data %>% rownames_to_column("cell_id"), by = "cell_id")
+
+cols <- c("Library batch 1" = "#1F78B4", "Library batch 2" = "#FF7F00", "Library batch 3" = "#33A02C",  "Library batch 4" = "#E31A1C")
+
+batch_levels <- names(cols)
+
+plots <- map(batch_levels, function(b) {
+  ggplot() +
+    geom_point(data = umap_df, aes(x = umap_1, y = umap_2), color = "gray90", size = 0.5) +
+    geom_point(data = filter(umap_df, batch == b), 
+               aes(x = umap_1, y = umap_2, color = batch), size = 0.6) +
+    scale_color_manual(values = cols) +
+    ggtitle(paste(b)) +
+    theme_bw() +
+    theme(
+      plot.title = element_text(hjust = 0.5, face = "bold"),
+      legend.position = "none",
+      panel.grid = element_blank()
+    )
+})
+
+p <- plot_grid(plotlist = plots, ncol = 2)
+
+#ggsave("~/figures/fig3/SuppFig4B_TumorCells_colored_by_LP_batch_faceted.pdf", plot = p, width = 5, height = 5)
+p
+```
+
+
+# Supp Fig 4B - DotPlot Cell type markers by cell type
+Cell type annotations based on canonical lineage marker expression.
+
+
+```{r}
+# clean up dotplot data to remove unwanted cell types
+srt_merge_dotplot <- srt_merge
+srt_merge_dotplot <- subset(srt_merge_dotplot, subset = cell_type_manual_refined != "Malignant")
+
+# combine cycling cells
+srt_merge_dotplot$cell_type_manual_refined[(srt_merge_dotplot$cell_type_manual_refined == "Cycling myeloid cell" 
+                                            | srt_merge_dotplot$cell_type_manual_refined == "Cycling lymphoid cell" )] <- "Cycling cell"
+
+srt_merge_dotplot$cell_type_manual_refined %>% table()
+```
+
+```{r, fig.width = 10, fig.height = 4, dpi = 180}
+# output directory
+out_dir <- "~/figures/fig3/"
+
+# Read in the marker list once
+markers_df <- read_csv("~/resources/cell_type_markers_forDotplot_refined.csv")
+marker_genes <- unique(markers_df$marker)
+marker_genes <- factor(marker_genes, levels = marker_genes)
+
+
+# Define the desired cell type order
+desired_order <- c("Neuron", "Glial cell", "CD8 T cell", "CD4 T cell", "Regulatory T cell", "NK cell", "Plasma cell", "Mixed lymphoid-myeloid", "Monocyte", "Macrophage", "pDC", "Endothelial", "Cycling cell")
+
+# check that the ordered cell types are identical to the values in metadata
+all(desired_order %in% unique(srt_merge_dotplot@meta.data$cell_type_manual_refined))
+all(unique(srt_merge_dotplot@meta.data$cell_type_manual_refined) %in% desired_order)
+
+srt_cells <- unique(srt_merge_dotplot$cell_type_manual_refined)
+srt_cells[!srt_cells %in% desired_order]
+
+srt_merge_dotplot@meta.data$cell_type_manual_refined <- factor(srt_merge_dotplot@meta.data$cell_type_manual_refined, levels = desired_order)
+
+  
+plot <- DotPlot(srt_merge_dotplot,  features = marker_genes, group.by= 'cell_type_manual_refined', dot.scale = 6, cluster.idents = FALSE) + RotatedAxis() +
+  scale_color_viridis_c(option = "D", name = "Mean scaled expression") 
+
+ggsave("~/figures/suppfig4/SuppFig4B_DotPlot_AllCells_RefinedMarkers.pdf", plot = plot, width = 12, height = 6, device = cairo_pdf())
+plot
+```
+
+
+```{r}
+#remove dotplot to save space
+rm(srt_merge_dotplot)
+```
+
+# Supp Fig 4C: UMAP - colored by marker genes
+```{r}
+markers_path <- "~/resources/cell_type_markers_for_multi_marker_UMAP.csv"
+
+plot_marker_umaps(srt_merge, markers_path, samplename = "SuppFig4C_UMAP_colored_by_marker_genes", path_out = "~/figures/suppfig4/")
+
+```
+
+
+# Figure 3F - Malignant cells: EGFR UMAP
+EGFR expression in neoplastic cells pre- and post-CAR T treatment – all patients together? On the UMAP?.
+
+```{r}
+srt_merge_malig <- subset(srt_merge, subset = cell_type_manual_refined == "Malignant")
+```
+
+
+
+```{r}
+# get cell counts for timepoint and make new metadata column
+
+# Count number of cells per group
+cell_counts <- table(srt_merge_malig$Timepoint)
+
+# Create a named vector of labels with counts
+label_with_counts <- paste0(names(cell_counts), " (", cell_counts, ")")
+names(label_with_counts) <- names(cell_counts)
+
+# Add a new metadata column with those labels
+counted_cells <- label_with_counts[match(srt_merge_malig$Timepoint, names(label_with_counts))]
+names(counted_cells) <- colnames(srt_merge_malig)
+
+srt_merge_malig <- AddMetaData(srt_merge_malig, metadata = counted_cells, col.name = "timepoint_with_counts")
+srt_merge_malig$timepoint_with_counts %>% table()
+```
+
+```{r}
+tp_cols <- c(
+  "Pre (15669)" = "#A6BD8C", 
+  "Post (11665)" = "firebrick4")
+
+srt_merge_malig$timepoint_with_counts <- factor(srt_merge_malig$timepoint_with_counts, 
+                                                levels = names(tp_cols))
+```
+
+
+```{r}
+p1 <- FeaturePlot(srt_merge_malig, features = "EGFR", raster = FALSE) + 
+  ggtitle("Malignant Cells: EGFR expression")
+p2 <- DimPlot(srt_merge_malig, group.by = "timepoint_with_counts", cols = tp_cols, raster = FALSE) + 
+  ggtitle("Malignant Cells: Treatment")
+p3 <- DimPlot(srt_merge_malig, group.by = "sample_name") + 
+  ggtitle("Malignant Cells: Sample")
+
+#ggsave(filename = "~/figures/suppfig4/SuppFig4G_MaligCells_EGFR_UMAP_EGFR_expression.pdf", plot = p1, width = 8, height = 6)
+#ggsave(filename = "~/figures/suppfig4/SuppFig4G_MaligCells_EGFR_UMAP_by_timepoint.pdf", plot = p2, width = 8, height = 6)
+#ggsave(filename = "~/figures/suppfig4/MaligCells_UMAP_by_sample.pdf", plot = p3, width = 8, height = 6)
+
+p1
+p2
+p3
+```
+
+
+# Supplemental Figure 3G - EGFR expression by sample
+```{r}
+
+# setup EGFR boxplots
+# Get EGFR and IL13RA2 expression and metadata
+malig_df <- FetchData(srt_merge_malig, vars = c("EGFR", "IL13RA2", "sample_name", "Timepoint"))
+colnames(malig_df)[1] <- "EGFR"  # make sure it's labeled clearly
+
+comparisons <- list(
+  c("P1 Pre", "P1 Post"),
+  c("P4 Pre", "P4 Post"),
+  c("P7 Pre", "P7 Post")
+)
+unique(malig_df$sample_name)
+```
+
+```{r}
+patient_colors <- c(
+  "P1 Pre"  = "orange",  
+  "P1 Post" = "#e97132", 
+  "P4 Pre"  = "lightgreen",  
+  "P4 Post" = "#196b24",  
+  "P7 Pre"  = "#0f9ed5",  
+  "P7 Post" = "#156082"   
+)
+```
+
+```{r}
+sample_order <- c("P1 Pre", "P1 Post", "P7 Pre", "P7 Post", "P4 Pre", "P4 Post")
+malig_df$sample_name <- factor(malig_df$sample_name, levels = sample_order)
+malig_df$sample_name %>% table()
+
+all(names(patient_colors) %in% malig_df$sample_name)
+```
+# Fig 3F - plot of egfr levels by sample (Pt/Tp) 
+
+```{r}
+# beeswarm + boxplot
+plot <- ggplot(malig_df, aes(x = sample_name, y = EGFR, fill = sample_name)) +
+  geom_boxplot(outlier.shape = NA) +  # boxplot without outlier dots
+  geom_beeswarm(priority = "density", cex = 0.1, alpha = 0.2, color = "gray") +  # beeswarm overlay
+  scale_fill_manual(values = patient_colors) +
+  stat_compare_means(comparisons = comparisons, method = "wilcox.test", label = "p.format") +
+  theme_minimal() +
+  labs(title = "Malignant cells: EGFR expression by sample", x = "Sample", y = "EGFR Expression") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        panel.grid = element_blank(),
+        legend.position = "none")
+
+#ggsave("~/figures/fig3/Fig3F_MaligCell_EGFR_expression_by_sample_wilcox_box_beeswarm.pdf", plot = plot)
+plot
+```
+
+```{r}
+plot <- ggplot(malig_df, aes(x = sample_name, y = EGFR, fill = sample_name)) +
+  geom_violin(trim = FALSE, scale = "width", color = NA, alpha = 0.8) +  # violin plot
+  geom_beeswarm(priority = "density", cex = 0.1, alpha = 0.2, color = "gray") +  # beeswarm overlay
+  scale_fill_manual(values = patient_colors) +
+  stat_compare_means(comparisons = comparisons, method = "wilcox.test", label = "p.signif") +
+  theme_minimal() +
+  labs(title = "Malignant cells: EGFR expression by sample", x = "Sample", y = "EGFR Expression") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        panel.grid = element_blank(),
+        legend.position = "none")
+
+#ggsave("~/figures/fig3/Fig3F_MaligCell_EGFR_expression_by_sample_wilcox_violin_beeswarm.pdf", plot = plot)
+plot
+```
+
+
+```{r}
+# Compute Wilcoxon tests based on your comparisons list
+wilcox_table <- compare_means(
+  formula = EGFR ~ sample_name,
+  data = malig_df,
+  method = "wilcox.test",
+  comparisons = comparisons
+)
+
+```
+
+
+# plot interval between infusion and second surgery
+```{r}
+
+timeline_df <- read_csv("~/external_resources/surgery_interval.csv")
+#timeline_df <- read_csv("~/Dropbox (PennNeurosurgery)/SilverbushLab/Projects/E20_tumor_analysis/external_resources/surgery_interval.csv")
+
+timeline_df$Patient <- factor(timeline_df$Patient, levels = c("P1", "P7", "P4"))
+colors = c("P1" = "#e97132", "P4" = "#196b24", "P7" = "#0f9ed5")
+
+plot <- ggplot(timeline_df, aes(x = Patient, y = infusion_second_surgery_interval, fill = Patient)) +
+  geom_bar(stat = "identity") +
+  scale_fill_manual(values = colors) +
+  theme_bw() +
+  theme(axis.title.x = element_blank(),
+        panel.grid = element_blank(),
+        legend.position = "none")
+
+#ggsave("~/figures/fig3/Fig3G_patient_infusion_surgery_interval.pdf", width = 2.5, height = 5, plot = plot)
+
+plot
+```
+
+# Fig 3G Plot PFS
+```{r}
+colors = c("P1" = "#e97132", "P4" = "#196b24", "P7" = "#0f9ed5")
+pfs <- read_csv("~/external_resources/PFSforDana_latest_.csv") %>%
+  dplyr::filter(patient %in% c("P1", "P7", "P4")) 
+  
+pfs$patient <- factor(pfs$patient, levels = c("P1", "P7", "P4"))
+
+plot <- ggplot(pfs, aes(x = patient, y = pfs, fill = patient)) +
+  geom_bar(stat = "identity") +
+  scale_fill_manual(values = colors) +
+  labs(y = "Progression-free survival",
+       title = "Progression-free survival by patient") +
+  theme_bw() +
+  theme(axis.title.x = element_blank(),
+        panel.grid = element_blank(),
+        legend.position = "none")
+#ggsave("~/figures/fig3/Fig3G_pfs.pdf", width = 2.5, height = 5, plot = plot)  
+plot
+```
+
+```{r}
+patient_colors <- c(
+  "P1 Pre"  = "orange",  
+  "P1 Post" = "#e97132", 
+  "P4 Pre"  = "lightgreen",  
+  "P4 Post" = "#196b24",  
+  "P7 Pre"  = "#0f9ed5",  
+  "P7 Post" = "#156082"   
+)
+```
+
+# Fig 3G -plot CSF CD8 CAR T cell cytotoxicity and exhaustion score by sample 
+```{r}
+sample_colors <- c("P1D7" = "red4", "P1D21" ="red4", "P7D7" = "darkblue", "P7D21" = "darkblue", "P4D7" = "darkgreen", "P4D21" = "darkgreen")
+# read in and subset CSF data
+#srt_csf_CAR_CD8 <- readRDS("~/Dropbox (PennNeurosurgery)/SilverbushLab/Projects/E20_tumor_analysis/external_resources/CSF_scData/annotated_prepost_csf.rds") %>%
+#  subset(subset = cell_type == "CD8+ CAR T") %>%
+#  subset(subset = sample_id %in% names(sample_colors))
+
+srt_csf_CAR_CD8 <- readRDS("~/external_resources/CSF_scData/annotated_prepost_csf.rds") %>%
+  subset(subset = cell_type == "CD8+ CAR T") %>%
+  subset(subset = sample_id %in% names(sample_colors))
+
+
+
+# read in and format signature
+#sigs <- read_csv("~/Dropbox (PennNeurosurgery)/SilverbushLab/Projects/E20_tumor_analysis/external_resources/wherry_pace_signatures.csv")
+sigs <- read_csv("~/external_resources/wherry_pace_signatures.csv")
+markers <- list("Pace effector markers" = sigs$Pace_effector_markers[!is.na(sigs$Pace_effector_markers)],
+                              "Wherry exhaustion markers" = sigs$Wherry_exhaustion_markers[!is.na(sigs$Wherry_exhaustion_markers)])
+
+srt_csf_CAR_CD8 <- AddModuleScore(srt_csf_CAR_CD8,
+                                features = markers)
+
+srt_csf_CAR_CD8$sample_id <- factor(srt_csf_CAR_CD8$sample_id, levels = names(sample_colors))
+
+meta <- srt_csf_CAR_CD8@meta.data 
+colnames(meta)[colnames(meta) == "Cluster1"] = "Pace effector markers"
+colnames(meta)[colnames(meta) == "Cluster2"] = "Wherry exhaustion markers"
+```
+
+
+```{r}
+# plot effector markers - D7 only
+samples <- c("P1D7", "P7D7", "P4D7")
+sample_colors = c("P1D7" = "#e97132", "P4D7" = "#196b24", "P7D7" = "#0f9ed5")
+meta <- meta %>% dplyr::filter(sample_id %in% samples)
+meta$sample_id <- factor(meta$sample_id, levels = samples)
+
+comparisons_list <- list(c("P4D7", "P1D7"), 
+                         c("P4D7", "P7D7"), 
+                         c("P1D7", "P7D7"))
+
+plot1 <- ggplot(data = meta, aes(x = sample_id, y = `Pace effector markers`, fill = sample_id)) +
+  geom_violin() + 
+  scale_fill_manual(values = sample_colors) +
+  stat_summary(fun = mean, geom = "crossbar", width = 0.75, color = "black", fatten = 1) + 
+  stat_compare_means(comparisons = comparisons_list, 
+                     method = "wilcox.test",
+                     label = "p.signif", 
+                     hide.ns = TRUE) +
+  theme_bw() +
+  labs(title = "CD8 CAR T-D7",
+       subtitle = "Pace Effector",
+       x = "Pace Effector Markers expression") +
+  theme(panel.grid = element_blank(),
+        axis.title.x = element_blank(),
+        legend.position = "none")
+
+plot2 <- ggplot(data = meta, aes(x = sample_id, y = `Wherry exhaustion markers`, fill = sample_id)) +
+  geom_violin() + 
+  scale_fill_manual(values = sample_colors) +
+  stat_summary(fun = mean, geom = "crossbar", width = 0.75, color = "black", fatten = 1) +  
+  stat_compare_means(comparisons = comparisons_list, 
+                     method = "wilcox.test",
+                     label = "p.signif", 
+                     hide.ns = TRUE) +
+  theme_bw() +
+  labs(title = "CD8 CAR T-D7",
+       subtitle = "Wherry Exhaustion",
+       x = "Wherry exhaustion marker expression") +
+  theme(panel.grid = element_blank(),
+        axis.title.x = element_blank(),
+        legend.position = "none")
+
+
+#ggsave("~/figures/fig3/Fig3G_CD8_CAR_Tcells_D7_Pace_effector_markers.pdf", plot = plot1, width = 3, height = 6)
+#ggsave("~/figures/fig3/Fig3G_CD8_CAR_Tcells_D7_Wherry_exhaustion_markers.pdf", plot = plot2, width = 3, height = 6)
+plot1
+plot2
+```
+
+```{r}
+# externally calculate wilcox tests for effector/cytotoxicity and exhaustion markers
+# Define comparisons
+samples <- c("P1D7", "P4D7", "P7D7")
+comparisons <- combn(samples, 2, simplify = FALSE)  # all pairwise
+
+# Function to do Wilcoxon tests for a given signature column
+run_wilcox_tests <- function(df, column) {
+  df %>%
+    select(sample_id, !!sym(column)) %>%
+    wilcox_test(as.formula(paste0("`", column, "` ~ sample_id"))) %>%
+    adjust_pvalue(method = "bonferroni") %>%
+    add_significance()
+}
+
+# For Pace effector markers
+wilcox_effector <- run_wilcox_tests(meta, "Pace effector markers")
+
+# For Wherry exhaustion markers
+wilcox_exhaustion <- run_wilcox_tests(meta, "Wherry exhaustion markers")
+```
+
+
+
+# CSF Tumor integration
+
+```{r}
+# Import CSF
+external_path <- "~/Dropbox (PennNeurosurgery)/SilverbushLab/Projects/E20_tumor_analysis"
+srt_csf <- readRDS(file.path(external_path, "external_resources/CSF_scData/annotated_prepost_csf.rds"))
+
+# integrate cell types
+srt_csf$cell_type_manual_refined <- srt_csf$cell_type
+
+srt_csf$cell_type_manual_refined[srt_csf$cell_type_manual_refined == "CD4+ T"] <- "CD4 T cell"
+srt_csf$cell_type_manual_refined[srt_csf$cell_type_manual_refined == "CD8+ T"] <- "CD8 T cell"
+srt_csf$cell_type_manual_refined[srt_csf$cell_type_manual_refined == "Plasma"] <- "Plasma cell"
+srt_csf$cell_type_manual_refined[srt_csf$cell_type_manual_refined == "Cycling CD8+ T"] <- "Cycling T cell"
+srt_csf$cell_type_manual_refined[srt_csf$cell_type_manual_refined == "Cycling CD4+ T"] <- "Cycling T cell"
+srt_csf$cell_type_manual_refined[srt_csf$cell_type_manual_refined == "Treg"] <- "Regulatory T cell"
+srt_csf$cell_type_manual_refined[srt_csf$cell_type_manual_refined == "B"] <- "B cell"
+srt_csf$cell_type_manual_refined[srt_csf$cell_type_manual_refined == "NK"] <- "NK cell"
+
+srt_csf$cell_type_manual_refined %>% table()
+```
+
+
+```{r}
+# import tumors
+srt_merge <- readRDS("~/Dropbox (PennNeurosurgery)/SilverbushLab/Projects/E20_tumor_analysis/processed_data/tumors_normalized_merged_scaled_dimreduction_annotated_srt.rds")
+#srt_merge <- readRDS("~/processed_data/tumors_normalized_merged_scaled_dimreduction_annotated_withTCR_srt.rds")
+
+# modify cell type names
+srt_merge$cell_type_manual_refined[srt_merge$cell_type_manual_refined == "Plasma cells"] <- "Plasma cell"
+srt_merge$cell_type_manual_refined[srt_merge$cell_type_manual_refined == "Proliferating myeloid cells"] <- "Cycling myeloid cell"
+srt_merge$cell_type_manual_refined[srt_merge$cell_type_manual_refined == "Proliferating T cell"] <- "Cycling T cell"
+srt_merge$cell_type_manual_refined[srt_merge$cell_type_manual_refined == "Ambiguous"] <- "Mixed lymphoid-myeloid"
+
+
+srt_merge$cell_type_manual_refined %>% table()
+```
+
+
+```{r}
+srt_tumor_csf <- merge(srt_merge, y = srt_csf)
+
+# In Seurat v5 you have to manually join all the layers.
+# separately join normalized layers (data) and raw counts "counts"
+
+srt_tumor_csf <- JoinLayers(srt_tumor_csf)
+Layers(srt_tumor_csf)
+
+
+```
+
+
+```{r}
+# Run UMAP on combined data
+set.seed(1234)
+
+# we are not using P16. so exclude it.
+srt_tumor_csf <- subset(srt_tumor_csf, subset = orig.ident != "P16_Post_11907")
+
+sample_name <- "tumors_csf_combined"
+
+```
+
+```{r}
+out_dir <- file.path(external_path, "results/dimreduction/umap")
+
+# find variable features
+srt_tumor_csf <- FindVariableFeatures(srt_tumor_csf, selection.method = "vst", nfeatures = 2000)
+
+srt_tumor_csf <- ScaleData(srt_tumor_csf, features = VariableFeatures(srt_tumor_csf))
+
+srt_tumor_csf <- RunPCA(srt_tumor_csf, features = VariableFeatures(object = srt_tumor_csf))
+
+ElbowPlot(srt_tumor_csf)
+
+```
+
+
+From elbow plot, use 10 PCs
+```{r}
+srt_tumor_csf <- create_UMAP(srt_tumor_csf, sample_name = sample_name, umap_dir = out_dir, num_pcs = 10, res = 0.25)
+
+DimPlot(srt_tumor_csf, group.by = "cell_type_manual_refined", raster = FALSE) +
+  ggtitle("UMAP: CSF and Tumor cells - no batch correction")
+
+#ggsave("~/Dropbox (PennNeurosurgery)/SilverbushLab/Projects/E20_tumor_analysis/figures/fig3/Fig3D_UMAP_tumors_csf_combined.pdf", 
+#       width = 14, height = 9, dpi = 300, units = "in")
+
+srt_tumor_csf@meta.data %>% head()
+srt_tumor_csf@meta.data$cell_type_manual_refined %>% table() 
+srt_tumor_csf@meta.data$orig.ident %>% table()
+```
+
+# Prep data to examine batches of CSF - Tumor
+```{r}
+tissue_type <- case_when(srt_tumor_csf@meta.data$orig.ident == "SeuratProject" ~ "CSF",
+                         TRUE ~ "Tumor")
+
+srt_tumor_csf <- AddMetaData(srt_tumor_csf, tissue_type, col.name = "tissue_type")
+
+plot <- DimPlot(srt_tumor_csf, group.by = "tissue_type", raster = FALSE) +
+  ggtitle("UMAP: CSF and Tumor cells - by tissue 'batch' ")
+
+#ggsave(filename = "~/Dropbox (PennNeurosurgery)/SilverbushLab/Projects/E20_tumor_analysis/figures/fig3/SuppFig3C_UMAP_tumors_csf_combined_byBatch_PreCorrection.pdf", 
+#       plot = plot, width = 14, height = 9, dpi = 300, units = "in")
+plot
+```
+
+```{r}
+plot <- DimPlot(srt_tumor_csf, group.by = "orig.ident", raster = FALSE)
+plot
+```
+
+
+```{r}
+# batch correct with harmony
+srt_tumor_csf <- RunHarmony(srt_tumor_csf, group.by.vars = "tissue_type")
+```
+
+```{r}
+set.seed(1234)
+sample_name <- "tumor_csf_harmony"
+# run UMAP on harmony reduction
+ElbowPlot(srt_tumor_csf, reduction = "harmony")
+# from elbowplot, use 11 dims
+
+srt_tumor_csf <- create_UMAP(srt_tumor_csf, sample_name = sample_name, reduction = "harmony", umap_dir = out_dir, num_pcs = 11, res = 0.25)
+
+DimPlot(srt_tumor_csf, group.by = "tissue_type")
+```
+
+```{r}
+# get cell counts for types and make new metadata column
+# Count number of cells per group
+cell_counts <- table(srt_tumor_csf$cell_type_manual_refined)
+cell_counts
+# Create a named vector of labels with counts
+label_with_counts <- paste0(names(cell_counts), " (", cell_counts, ")")
+names(label_with_counts) <- names(cell_counts)
+label_with_counts
+# Add a new metadata column with those labels
+counted_cells <- label_with_counts[match(srt_tumor_csf$cell_type_manual_refined, names(label_with_counts))]
+names(counted_cells) <- colnames(srt_tumor_csf)
+srt_tumor_csf <- AddMetaData(srt_tumor_csf, metadata = counted_cells, col.name = "cell_type_with_counts")
+
+srt_tumor_csf$cell_type_with_counts[1:10]
+
+```
+
+
+```{r}
+# get cell counts for types and make new metadata column
+# Count number of cells per group
+cell_counts <- table(srt_tumor_csf$tissue_type)
+# Create a named vector of labels with counts
+label_with_counts <- paste0(names(cell_counts), " (", cell_counts, ")")
+label_with_counts
+names(label_with_counts) <- names(cell_counts)
+label_with_counts
+# Add a new metadata column with those labels
+counted_cells <- label_with_counts[match(srt_tumor_csf$tissue_type, names(label_with_counts))]
+names(counted_cells) <- colnames(srt_tumor_csf)
+srt_tumor_csf <- AddMetaData(srt_tumor_csf, metadata = counted_cells, col.name = "tissue_type_with_counts")
+
+
+srt_tumor_csf$tissue_type_with_counts[1:10]
+table(srt_tumor_csf$tissue_type_with_counts)
+```
+
+
+```{r}
+
+named_colors_tissue <- c(
+  "Tumor (61023)" = "#ff7f0e",
+  "CSF (87386)" = "#1f77b4"
+)
+```
+
+```{r}
+table(srt_tumor_csf$cell_type_with_counts)
+```
+
+
+```{r}
+#set up colors with counts
+named_colors_all <- c(
+  # CSF cell types
+  "CD4+ CAR T (17798)"         = "#569EA4",
+  "CD4 T cell (21656)"         = "#A6CEE3",
+  "CD8+ CAR T (13197)"         = "#D46F84",
+  "CD8 T cell (12783)"         = "#B294C7",
+  "Cycling T cell (772)"       = "#C7B699",
+  "Mixed CAR+/CAR- Tfh (1394)" = "#FE8B14",
+  "Regulatory T cell (7808)"   = "#52AF43",
+  "NK cell (4551)"             = "#E6CB75",
+  "MAIT (87)"                  = "#B15928",
+  "Monocyte (9373)"            = "#F68181",
+  "Macrophage (15036)"         = "#4992C2",
+  "cDC1 (393)"                 = "#FDB761",
+  "cDC2 (1108)"                = "#8BAD49",
+  "mregDC (1244)"              = "#FD8C4C",
+  "pDC (961)"                  = "#70449D",
+  "B cell (1358)"              = "#E5292B",
+  "Plasma cell (579)"          = "#AADB84",
+
+  # Tumor-exclusive cell types (beautified)
+  "Malignant (27334)"              = "#B22222",
+  "Cycling myeloid cell (329)"     = "#E6AB02",
+  "Glial cell (9839)"              = "#984EA3",
+  "Mixed lymphoid-myeloid (470)"   = "#4DAF4A",
+  "Endothelial (254)"              = "#FF69B4",
+  "Neuron (85)"                    = "#377EB8"
+)
+
+```
+
+# Fig 3D-E
+```{r fig.width=9, fig.height= 4}
+p1 <- DimPlot(srt_tumor_csf, group.by = "cell_type_with_counts", cols = named_colors_all, raster = FALSE)
+p2 <- DimPlot(srt_tumor_csf, group.by = "tissue_type_with_counts", cols = named_colors_tissue, raster = FALSE, order = c("Tumor", "CSF"))
+
+p1
+p2
+```
+
+
+# checkpoint - save harmony tumor_csf obj and reload
+```{r}
+# warning - only do this if necessary - very large file
+#saveRDS(srt_tumor_csf, "~/Dropbox (PennNeurosurgery)/SilverbushLab/Projects/E20_tumor_analysis/processed_data/tumors_csf_combined_full_annotation_harmony_srt.rds")
+```
+
