@@ -4,6 +4,11 @@ output: html_document
 date: "2025-04-18"
 ---
 
+
+```{r}
+install.packages("ggbreak")
+```
+
 ```{r}
 library(Seurat)
 library(tidyr)
@@ -15,6 +20,7 @@ library(purrr)
 library(cowplot)
 library(rstatix)
 library(ggbeeswarm)
+library(ggbreak)
 ```
 
 
@@ -245,7 +251,6 @@ srt_merge <- AddMetaData(srt_merge, batches, col.name = "batch")
 ```{r}
 # option to start from here
 srt_merge <- readRDS("~/processed_data/tumors_fig_3_processed_with_umap_reduction.rds")
-#srt_merge <- readRDS("~/Dropbox (PennNeurosurgery)/SilverbushLab/Projects/E20_tumor_analysis/processed_data/tumors_fig_3_processed_with_umap_reduction.rds")
 
 # make sure to check the umap
 DimPlot(srt_merge)
@@ -410,11 +415,10 @@ p <- ggplot(composition_df, aes(x = sample_name, y = proportion, fill = cell_typ
   ) 
 
 #ggsave(plot = p, filename = "~/figures/fig3/SuppFig3X_tumor_cell_types_stacked_barplot.pdf", width = 5, height = 5)
-#ggsave(plot = p, filename = "~/Dropbox (PennNeurosurgery)/SilverbushLab/Projects/E20_tumor_analysis/figures/fig3/Fig3X_tumor_cell_types_stacked_barplot.pdf", width = 5, height = 5)
 p
 ```
 
-# plot T cell types by timepoint
+# Fig 3E, Supp Fig 4G plot T cell and myeloid  types by timepoint
 ```{r}
 # set up colors
 tcell_colors <- c(
@@ -441,16 +445,106 @@ immune_cells <- c(
 )
 ```
 
+```{r}
+# get composition of immune cell types
+composition_df <- meta %>%
+  filter(cell_type_manual_refined %in% immune_cells) %>%
+  group_by(Timepoint, cell_type_manual_refined) %>%
+  summarise(n = n(), .groups = "drop") %>%
+  group_by(Timepoint) %>%
+  mutate(proportion = n / sum(n)) %>%
+  ungroup()
+
+# get t cell fractions
+tcell_df <- composition_df %>%
+  filter(cell_type_manual_refined %in% names(tcell_colors))
+
+# Compute "Other" as 1 - sum of T cells for each timepoint
+other_df <- tcell_df %>%
+  group_by(Timepoint) %>%
+  summarize(proportion = 1 - sum(proportion)) %>%
+  mutate(cell_type_manual_refined = "Other immune cells")
+
+# Combine back with T cell data
+plot_df_tcell <- bind_rows(tcell_df, other_df)
+
+# Add gray color for "Other immune cells"
+tcell_colors_full <- c(tcell_colors, "Other immune cells" = "gray70")
+
+# Ensure factors are in the correct order
+plot_df_tcell$cell_type_manual_refined <- factor(plot_df_tcell$cell_type_manual_refined, levels = c( "Other immune cells", names(tcell_colors)))
+plot_df_tcell$Timepoint <- factor(plot_df_tcell$Timepoint, levels = c("Pre", "Post"))
+
+# get myeloid fractions
+myeloid_df <- composition_df %>%
+  filter(cell_type_manual_refined %in% names(myeloid_colors))
+
+# Compute "Other" as 1 - sum of T cells for each timepoint
+other_df <- myeloid_df %>%
+  group_by(Timepoint) %>%
+  summarize(proportion = 1 - sum(proportion)) %>%
+  mutate(cell_type_manual_refined = "Other immune cells")
+
+# Combine back with T cell data
+plot_df_myeloid <- bind_rows(myeloid_df, other_df)
+
+# Add gray color for "Other immune cells"
+myeloid_colors_full <- c(myeloid_colors, "Other immune cells" = "gray70")
+
+# Ensure factors are in the correct order
+plot_df_myeloid$cell_type_manual_refined <- factor(plot_df_myeloid$cell_type_manual_refined, levels = c( "Other immune cells", names(myeloid_colors)))
+plot_df_myeloid$Timepoint <- factor(plot_df_myeloid$Timepoint, levels = c("Pre", "Post"))
+```
+
+```{r}
+p1 <- ggplot(plot_df_tcell, aes(x = Timepoint, y = proportion, fill = cell_type_manual_refined)) +
+  geom_bar(stat = "identity") +
+  scale_fill_manual(values = tcell_colors_full) +
+  ylab("Proportion of Immune Cells") +
+  xlab("Timepoint") +
+  labs(fill = "Cell Type",
+       title = "Proportion of T cells (out of immune cells") +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "right",
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank()
+  ) +
+  scale_y_break(c(0.3, 0.9))
+
+p2 <- ggplot(plot_df_myeloid, aes(x = Timepoint, y = proportion, fill = cell_type_manual_refined)) +
+  geom_bar(stat = "identity") +
+  scale_fill_manual(values = myeloid_colors_full) +
+  ylab("Proportion of Immune Cells") +
+  xlab("Timepoint") +
+  labs(fill = "Cell Type",
+       title = "Proportion of Myeloid cells (out of immune cells") +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "right",
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank()
+  ) 
+
+
+ggsave(plot = p1, filename = "~/figures/fig3/Fig3E_Tcell_stacked_barplot_with_all_immune.pdf", width = 5, height = 7)
+ggsave(plot = p2, filename = "~/figures/suppfig4/SuppFig4G_myeloid_stacked_barplot_with_all_immune.pdf", width = 5, height = 7)
+
+p1
+p2
+```
+
+
 
 ```{r}
 # Extract metadata
 meta <- srt_merge@meta.data
 
-immune_cells <- c(
-  "CD4 T cell", "CD8 T cell", "Cycling lymphoid cell", "Regulatory T cell", "NK cell", "Macrophage", "Monocyte","pDC", "Cycling myeloid cell", "Plasma cell", "Mixed lymphoid-myeloid")
 
 # Create a summary table with proportions
-composition_df <- meta %>%
+composition_tcell_df <- meta %>%
   filter(cell_type_manual_refined %in% immune_cells) %>%
   group_by(Timepoint, cell_type_manual_refined) %>% # make a separate dataframe for each unique combination of values of timepoint and cell_type_manual and sends to...
   summarise(n = n()) %>% # this counts up the number of entries (cells) for each combination and outputs them in a new column "n"
@@ -523,7 +617,8 @@ DimPlot(srt_merge, group.by = "batch") +
 
 #ggsave("~/figures/fig3/SuppFig3B_TumorCells_colored_by_LP_batch.pdf", width = 8, height = 6)
 ```
-# Supp Fig 4 -Tumors colored by batch
+
+# Supp Fig 4B -Tumors colored by batch
 ```{r}
 # suppose we want separate plots for each batch
 umap_df <- as.data.frame(Embeddings(srt_merge, "umap")) %>%
@@ -556,7 +651,7 @@ p
 ```
 
 
-# Supp Fig 4B - DotPlot Cell type markers by cell type
+# Supp Fig 4D - DotPlot Cell type markers by cell type
 Cell type annotations based on canonical lineage marker expression.
 
 
@@ -617,7 +712,7 @@ plot_marker_umaps(srt_merge, markers_path, samplename = "SuppFig4C_UMAP_colored_
 ```
 
 
-# Figure 3F - Malignant cells: EGFR UMAP
+# Supp Fig 4J - Malignant cells: EGFR UMAP
 EGFR expression in neoplastic cells pre- and post-CAR T treatment – all patients together? On the UMAP?.
 
 ```{r}
@@ -662,8 +757,8 @@ p2 <- DimPlot(srt_merge_malig, group.by = "timepoint_with_counts", cols = tp_col
 p3 <- DimPlot(srt_merge_malig, group.by = "sample_name") + 
   ggtitle("Malignant Cells: Sample")
 
-#ggsave(filename = "~/figures/suppfig4/SuppFig4G_MaligCells_EGFR_UMAP_EGFR_expression.pdf", plot = p1, width = 8, height = 6)
-#ggsave(filename = "~/figures/suppfig4/SuppFig4G_MaligCells_EGFR_UMAP_by_timepoint.pdf", plot = p2, width = 8, height = 6)
+#ggsave(filename = "~/figures/suppfig4/SuppFig4J_MaligCells_EGFR_UMAP_EGFR_expression.pdf", plot = p1, width = 8, height = 6)
+#ggsave(filename = "~/figures/suppfig4/SuppFig4J_MaligCells_EGFR_UMAP_by_timepoint.pdf", plot = p2, width = 8, height = 6)
 #ggsave(filename = "~/figures/suppfig4/MaligCells_UMAP_by_sample.pdf", plot = p3, width = 8, height = 6)
 
 p1
@@ -706,8 +801,7 @@ malig_df$sample_name %>% table()
 
 all(names(patient_colors) %in% malig_df$sample_name)
 ```
-# Fig 3F - plot of egfr levels by sample (Pt/Tp) 
-
+# Fig 3H - plot of egfr levels by sample (Pt/Tp) 
 ```{r}
 # beeswarm + boxplot
 plot <- ggplot(malig_df, aes(x = sample_name, y = EGFR, fill = sample_name)) +
@@ -726,6 +820,7 @@ plot
 ```
 
 ```{r}
+# violin plot + beeswarm
 plot <- ggplot(malig_df, aes(x = sample_name, y = EGFR, fill = sample_name)) +
   geom_violin(trim = FALSE, scale = "width", color = NA, alpha = 0.8) +  # violin plot
   geom_beeswarm(priority = "density", cex = 0.1, alpha = 0.2, color = "gray") +  # beeswarm overlay
@@ -758,7 +853,6 @@ wilcox_table <- compare_means(
 ```{r}
 
 timeline_df <- read_csv("~/external_resources/surgery_interval.csv")
-#timeline_df <- read_csv("~/Dropbox (PennNeurosurgery)/SilverbushLab/Projects/E20_tumor_analysis/external_resources/surgery_interval.csv")
 
 timeline_df$Patient <- factor(timeline_df$Patient, levels = c("P1", "P7", "P4"))
 colors = c("P1" = "#e97132", "P4" = "#196b24", "P7" = "#0f9ed5")
@@ -776,7 +870,7 @@ plot <- ggplot(timeline_df, aes(x = Patient, y = infusion_second_surgery_interva
 plot
 ```
 
-# Fig 3G Plot PFS
+# Fig 3I Plot PFS
 ```{r}
 colors = c("P1" = "#e97132", "P4" = "#196b24", "P7" = "#0f9ed5")
 pfs <- read_csv("~/external_resources/PFSforDana_latest_.csv") %>%
@@ -808,11 +902,10 @@ patient_colors <- c(
 )
 ```
 
-# Fig 3G -plot CSF CD8 CAR T cell cytotoxicity and exhaustion score by sample 
+# Fig 3I -plot CSF CD8 CAR T cell cytotoxicity and exhaustion score by sample 
 ```{r}
 sample_colors <- c("P1D7" = "red4", "P1D21" ="red4", "P7D7" = "darkblue", "P7D21" = "darkblue", "P4D7" = "darkgreen", "P4D21" = "darkgreen")
 # read in and subset CSF data
-#srt_csf_CAR_CD8 <- readRDS("~/Dropbox (PennNeurosurgery)/SilverbushLab/Projects/E20_tumor_analysis/external_resources/CSF_scData/annotated_prepost_csf.rds") %>%
 #  subset(subset = cell_type == "CD8+ CAR T") %>%
 #  subset(subset = sample_id %in% names(sample_colors))
 
@@ -823,7 +916,6 @@ srt_csf_CAR_CD8 <- readRDS("~/external_resources/CSF_scData/annotated_prepost_cs
 
 
 # read in and format signature
-#sigs <- read_csv("~/Dropbox (PennNeurosurgery)/SilverbushLab/Projects/E20_tumor_analysis/external_resources/wherry_pace_signatures.csv")
 sigs <- read_csv("~/external_resources/wherry_pace_signatures.csv")
 markers <- list("Pace effector markers" = sigs$Pace_effector_markers[!is.na(sigs$Pace_effector_markers)],
                               "Wherry exhaustion markers" = sigs$Wherry_exhaustion_markers[!is.na(sigs$Wherry_exhaustion_markers)])
@@ -1129,7 +1221,7 @@ named_colors_all <- c(
 
 ```
 
-# Fig 3D-E
+# Fig 3F - G: Merged CSF-Tumor - tissue type and cell type
 ```{r fig.width=9, fig.height= 4}
 p1 <- DimPlot(srt_tumor_csf, group.by = "cell_type_with_counts", cols = named_colors_all, raster = FALSE)
 p2 <- DimPlot(srt_tumor_csf, group.by = "tissue_type_with_counts", cols = named_colors_tissue, raster = FALSE, order = c("Tumor", "CSF"))
