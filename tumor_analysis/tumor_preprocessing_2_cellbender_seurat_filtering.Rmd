@@ -87,19 +87,14 @@ pre_vln <- wrap_plots(vln_list, ncol = 3) +
 ```
 
 # Define sample names
-
-
 ```{r}
-# we are omitting p16 for this manuscript
-sample_names <- c("Tumor_P1_Pre",
-                  "Tumor_P1_Post",
-                  "Tumor_P4_Pre",
-                  "Tumor_P4_Post",
-                  "Tumor_P7_Pre",
-                  "Tumor_P7_Post")
+sample_names <- c("P1_Pre",
+                  "P1_Post",
+                  "P4_Pre",
+                  "P4_Post",
+                  "P7_Pre",
+                  "P7_Post")
 ```
-
-
 
 # First import post-cellbender counts
 ```{r}
@@ -205,7 +200,7 @@ for(sample in sample_names){
 ```
 
 
-# Import cell annotation data
+# Import cell annotation data - Cell Ranger annotations
 ```{r}
 # Base directory where the raw data is stored
 base_dir <- "~/RawData/"
@@ -251,30 +246,6 @@ for (sample in sample_names) {
   }
 }
 
-```
-
-
-```{r}
-srt_obj <- seurat_objects_cellbender$P4_Pre_10973
-
-counts <- srt_obj$nCount_RNA
-upper_bound <- quantile(counts, 0.99)
-plot_obj <- subset(srt_obj, subset = nCount_RNA < upper_bound)
-sample_name <- "P4_Pre_10973"
-  # --- Pre-filter Violin Plot ---
-# Generate list of plots — one per feature
-vln_list <- lapply(c("nFeature_RNA", "nCount_RNA"), function(f) {
-  VlnPlot(plot_obj, features = f, pt.size = 0.3) +
-    scale_y_continuous(breaks = pretty_breaks(n = 7)) +
-    theme(legend.position = "none") +
-    ggtitle(f)
-})
-
-# Combine with patchwork
-pre_vln <- wrap_plots(vln_list, ncol = 2) +
-  plot_annotation(title = paste0("Pre-filter: ", sample_name))
-
-pre_vln
 ```
 
 
@@ -354,6 +325,7 @@ rm(seurat_objects_cellranger)
 rm(seurat_objects_consensus)
 rm(seurat_objects_scrublet)
 rm(seurat_qc)
+gc()
 ```
 
 
@@ -382,7 +354,6 @@ norm_layers <- grep("^data", Layers(srt_merge), value = TRUE)
 srt_merge <- JoinLayers(srt_merge)
 Layers(srt_merge)
 
-saveRDS(srt_merge, file = paste0(processed_data_dir, "tumors_normalized_merged_srt.rds"))
 ```
 
 
@@ -397,20 +368,13 @@ processed_data_dir <- "~/processed_data/"
 
 # Find variable features
 srt_merge <- FindVariableFeatures(srt_merge, selection.method = "vst", nfeatures = 2000)
-  
-# Identify the 10 most highly variable genes
-top10 <- head(VariableFeatures(srt_merge), 10)
-
-# Plot variable features (with and without labels)
-p1 <- VariableFeaturePlot(srt_merge)
-p2 <- LabelPoints(plot = p1, points = top10, repel = TRUE, max.overlaps = 100)
-  
-print(p1)
-print(p2)
 
 # Scale data - R crashes if you try to scale with all features. So only scale variable features and genes_to_scale for later annotation.
 srt_merge <- ScaleData(srt_merge, features = c(VariableFeatures(srt_merge), genes_to_scale)) 
-saveRDS(srt_merge, file = paste0(processed_data_dir, "tumors_normalized_merged_scaled_srt.rds"))
+```
 
+```{r}
+# save seurat obj for use in next script
+#saveRDS(srt_merge, file = paste0(processed_data_dir, "tumors_normalized_merged_scaled_srt_submission.rds"))
 ```
 

@@ -23,20 +23,79 @@ library(gghalves)
 # import annotated figure 3 data
 ```{r}
 # this srt object already has refined myeloid annotations. 
-srt_merge <- readRDS("~/processed_data/tumors_fig_3_processed_with_umap_reduction.rds") # only do if necessary
+srt_merge <- readRDS("~/processed_data/tumors_normalized_merged_scaled_dimreduction_annotated_srt_submission.rds") # only do if necessary
 
-srt_merge$sample_name %>% table()
+# add useful metadata
+sample_name <- gsub("_", " ", srt_merge$orig.ident)
+srt_merge <- AddMetaData(srt_merge, sample_name, col.name = "sample_name")
+
+patient <- srt_merge@meta.data$sample_name %>% word()
+srt_merge <- AddMetaData(srt_merge, patient, col.name = "patient")
+
+Timepoint <- ifelse(grepl("Pre", srt_merge$sample_name), "Pre", "Post")
+srt_merge <- AddMetaData(srt_merge, Timepoint, col.name = "Timepoint")
 ```
 
 # subset to all myeloid and subcluster
-There are an uneven number of T cells pre and post infusion. 
-randomly subset pre infusion T cells to make a fair comparison in cell abundance (expressing genes of interest) for pre and post infusion
+
 ```{r}
 srt_merge_myeloid <- subset(srt_merge, cell_type_manual_refined %in% c("Monocyte", "Macrophage", "pDC"))
 srt_merge_myeloid$Timepoint %>% table()
 
 ```
 
+# just plot SPP1 for myeloid
+```{r}
+genes_of_interest <- c("SPP1")
+
+# Extract expression and metadata
+df <- FetchData(srt_merge_myeloid, vars = c(genes_of_interest, "Timepoint")) %>%
+  tibble::rownames_to_column("cell")
+
+# Pivot to long format
+df_long <- df %>%
+  pivot_longer(cols = all_of(genes_of_interest), names_to = "gene", values_to = "expression")
+df_long$Timepoint <- factor(df_long$Timepoint, levels = c("Pre", "Post"))
+df_long$gene <- factor(df_long$gene, levels = genes_of_interest)
+```
+
+```{r}
+means_df <- df_long %>%
+  group_by(Timepoint, gene) %>%
+  summarize(mean_expr = mean(expression), .groups = "drop") %>%
+  mutate(x_pos = ifelse(Timepoint == "Pre", 1 + 0.45, 2 - 0.45))  # x position matching violin nudge
+
+p3 <- ggplot(df_long, aes(x = Timepoint, y = expression, fill = Timepoint)) +
+  gghalves::geom_half_violin(
+    data = df_long %>% filter(Timepoint == "Pre"),
+    aes(x = Timepoint),
+    side = "l", 
+    position = position_nudge(x = 0.5),
+    alpha = 0.8
+  ) +
+  gghalves::geom_half_violin(
+    data = df_long %>% filter(Timepoint == "Post"),
+    aes(x = Timepoint),
+    side = "r", 
+    position = position_nudge(x = -0.5),
+    alpha = 0.8
+  ) +
+  stat_compare_means(method = "wilcox.test", label = "p.format",  position = position_nudge(y = -0.5)) +  # Add Wilcoxon test
+  # Mean as small horizontal line
+  geom_segment(data = means_df, aes(x = x_pos - 0.05, xend = x_pos + 0.05, y = mean_expr, yend = mean_expr),
+               inherit.aes = FALSE, color = "black", size = 0.8) +
+  facet_wrap(~gene, scales = "free_y") +
+  theme_bw() +
+  theme(panel.grid = element_blank()) +
+  xlab("") + ylab("Expression") +
+  scale_fill_brewer(palette = "Set1") +
+  theme(
+    strip.text = element_text(size = 12),
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+#ggsave("~/figures/fig3/Fig3D_tumor_Myeloid_SPP1_by_timepoint.pdf", plot = p3, width = 4, height = 4)
+p3
+```
 
 # Plot split violin for myeloid genes
 ```{r}
@@ -54,6 +113,11 @@ df_long$gene <- factor(df_long$gene, levels = genes_of_interest)
 ```
 
 ```{r fig.width = 9, fig.height = 6}
+means_df <- df_long %>%
+  group_by(Timepoint, gene) %>%
+  summarize(mean_expr = mean(expression), .groups = "drop") %>%
+  mutate(x_pos = ifelse(Timepoint == "Pre", 1 + 0.45, 2 - 0.45))  # x position matching violin nudge
+
 p2 <- ggplot(df_long, aes(x = Timepoint, y = expression, fill = Timepoint)) +
   gghalves::geom_half_violin(
     data = df_long %>% filter(Timepoint == "Pre"),
@@ -69,7 +133,10 @@ p2 <- ggplot(df_long, aes(x = Timepoint, y = expression, fill = Timepoint)) +
     position = position_nudge(x = -0.5),
     alpha = 0.8
   ) +
-  stat_compare_means(method = "wilcox.test", label = "p.signif", position = position_nudge(y = -0.5)) +  # Add Wilcoxon test
+  stat_compare_means(method = "wilcox.test", label = "p.format",  position = position_nudge(y = -0.5)) +  # Add Wilcoxon test
+  # Mean as small horizontal line
+  geom_segment(data = means_df, aes(x = x_pos - 0.05, xend = x_pos + 0.05, y = mean_expr, yend = mean_expr),
+               inherit.aes = FALSE, color = "black", size = 0.8) +
   facet_wrap(~gene, scales = "free_y", ncol = 6, nrow = 2) +
   theme_bw() +
   theme(panel.grid = element_blank()) +
@@ -80,52 +147,8 @@ p2 <- ggplot(df_long, aes(x = Timepoint, y = expression, fill = Timepoint)) +
     axis.text.x = element_text(angle = 45, hjust = 1)
   )
 
-ggsave("~/figures/suppfig4/SuppFig4H_tumor_Myeloid_Genes_by_timepoint.pdf", plot = p2, width = 10, height = 5)
+#ggsave("~/figures/suppfig4/SuppFig4H_tumor_Myeloid_Genes_by_timepoint.pdf", plot = p2, width = 10, height = 5)
 p2
-```
-# just plot SPP1 for myeloid
-```{r}
-genes_of_interest <- c("SPP1")
-
-# Extract expression and metadata
-df <- FetchData(srt_merge_myeloid, vars = c(genes_of_interest, "Timepoint")) %>%
-  tibble::rownames_to_column("cell")
-
-# Pivot to long format
-df_long <- df %>%
-  pivot_longer(cols = all_of(genes_of_interest), names_to = "gene", values_to = "expression")
-df_long$Timepoint <- factor(df_long$Timepoint, levels = c("Pre", "Post"))
-df_long$gene <- factor(df_long$gene, levels = genes_of_interest)
-```
-
-```{r}
-p3 <- ggplot(df_long, aes(x = Timepoint, y = expression, fill = Timepoint)) +
-  gghalves::geom_half_violin(
-    data = df_long %>% filter(Timepoint == "Pre"),
-    aes(x = Timepoint),
-    side = "l", 
-    position = position_nudge(x = 0.5),
-    alpha = 0.8
-  ) +
-  gghalves::geom_half_violin(
-    data = df_long %>% filter(Timepoint == "Post"),
-    aes(x = Timepoint),
-    side = "r", 
-    position = position_nudge(x = -0.5),
-    alpha = 0.8
-  ) +
-  stat_compare_means(method = "wilcox.test", label = "p.signif", position = position_nudge(y = -0.5)) +  # Add Wilcoxon test
-  facet_wrap(~gene, scales = "free_y") +
-  theme_bw() +
-  theme(panel.grid = element_blank()) +
-  xlab("") + ylab("Expression") +
-  scale_fill_brewer(palette = "Set1") +
-  theme(
-    strip.text = element_text(size = 12),
-    axis.text.x = element_text(angle = 45, hjust = 1)
-  )
-#ggsave("~/figures/fig3/Fig3D_tumor_Myeloid_SPP1_by_timepoint.pdf", plot = p3, width = 4, height = 4)
-p3
 ```
 
 # subset to T cells
@@ -153,6 +176,11 @@ df_long$gene <- factor(df_long$gene, levels = genes_of_interest)
 
 
 ```{r fig.width = 9, fig.height = 4.5}
+means_df <- df_long %>%
+  group_by(Timepoint, gene) %>%
+  summarize(mean_expr = mean(expression), .groups = "drop") %>%
+  mutate(x_pos = ifelse(Timepoint == "Pre", 1 + 0.45, 2 - 0.45))  # x position matching violin nudge
+
 p4 <- ggplot(df_long, aes(x = Timepoint, y = expression, fill = Timepoint)) +
   gghalves::geom_half_violin(
     data = df_long %>% filter(Timepoint == "Pre"),
@@ -168,7 +196,10 @@ p4 <- ggplot(df_long, aes(x = Timepoint, y = expression, fill = Timepoint)) +
     position = position_nudge(x = -0.5),
     alpha = 0.8
   ) +
-  stat_compare_means(method = "wilcox.test", label = "p.signif", position = position_nudge(y = -0.5)) +  # Add Wilcoxon test
+  stat_compare_means(method = "wilcox.test", label = "p.format",  position = position_nudge(y = -0.5)) +  # Add Wilcoxon test
+  # Mean as small horizontal line
+  geom_segment(data = means_df, aes(x = x_pos - 0.05, xend = x_pos + 0.05, y = mean_expr, yend = mean_expr),
+               inherit.aes = FALSE, color = "black", size = 0.8) +
   facet_wrap(~gene, scales = "free_y", ncol = 7, nrow = 2) +
   theme_bw() +
   theme(panel.grid = element_blank()) +
@@ -179,6 +210,6 @@ p4 <- ggplot(df_long, aes(x = Timepoint, y = expression, fill = Timepoint)) +
     axis.text.x = element_text(angle = 45, hjust = 1)
   )
 
-ggsave("~/figures/suppfig4/SuppFig4I_tumor_Tcell_Genes_by_timepoint.pdf", plot = p4, width = 12, height = 5)
+#ggsave("~/figures/suppfig4/SuppFig4I_tumor_Tcell_Genes_by_timepoint.pdf", plot = p4, width = 12, height = 5)
 p4
 ```

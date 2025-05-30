@@ -102,27 +102,19 @@ set.seed(1234)
 #import filtered/preprocessed seurat objects
 ```{r}
 #srt_merge <- read_rds("~/processed_data/tumors_normalized_merged_scaled_dimreduction_annotated_srt.rds")
-srt_merge <- readRDS("~/Dropbox (PennNeurosurgery)/SilverbushLab/Projects/E20_tumor_analysis/processed_data/tumors_normalized_merged_scaled_dimreduction_annotated_srt.rds")
+srt_merge <- readRDS("~/Dropbox (PennNeurosurgery)/SilverbushLab/Projects/E20_tumor_analysis/processed_data/tumors_normalized_merged_scaled_dimreduction_annotated_srt_submission.rds")
 ```
 
 # prep seurat obj
 ```{r}
-# Filter out p16
-srt_merge <- subset(srt_merge, orig.ident != "P16_Post_11907")
-
-# for formality, remove redo from orig ident and colnames
-srt_merge$orig.ident <- gsub("_redo", "", srt_merge$orig.ident)
-colnames(srt_merge) <- gsub("_redo", "", colnames(srt_merge))
-
 # fix sample labels for aesthetics. create as new labels for safety
-new_labels <- gsub("_[0-9]{5}$", "", srt_merge$orig.ident)
-new_labels <- gsub("_", " ", new_labels)
+new_labels <- gsub("_", " ", srt_merge$orig.ident)
 
 srt_merge <- AddMetaData(srt_merge, new_labels, col.name = "sample_name")
 
 # Check new names
 srt_merge$orig.ident %>% table()
-colnames(srt_merge)[srt_merge$orig.ident == "P7_Post_11517"][1:10]
+colnames(srt_merge)[srt_merge$orig.ident == "P7_Post"][1:10]
 srt_merge$sample_name %>% table()
 
 ```
@@ -148,7 +140,7 @@ srt_merge_sub <- subset(srt_merge, cells = sampled_cells)
 ```{r}
 # Read malignant cluster calls
 #malig_file <- "~/resources/malignant_cell_calls/tumor_merged.txt"
-malig_file <- "~/Dropbox (PennNeurosurgery)/SilverbushLab/Projects/E20_tumor_analysis/resources/malignant_cell_calls/tumor_merged.txt"
+malig_file <- "~/Dropbox (PennNeurosurgery)/SilverbushLab/Projects/E20_tumor_analysis/resources/malignant_cell_calls/tumor_merged_submission.txt"
 malig_clusters <- read_lines(malig_file)
 # Get number of clusters
 nClusters <- length(table(FetchData(srt_merge_sub, vars = "seurat_clusters")))
@@ -196,7 +188,7 @@ out_dir <- "~/Dropbox (PennNeurosurgery)/SilverbushLab/Projects/E20_tumor_analys
 # Process annotations
 GEX_matrix <- process_seurat_annotations(
   seurat_obj = srt_merge_sub,
-  sample_name = "tumors_merge", # this is different from the sample name input into run infercnv. This changes the suffix of the annotation files
+  sample_name = "tumors_merge_submission", # this is different from the sample name input into run infercnv. This changes the suffix of the annotation files
   output_dir = out_dir)
 ```
 
@@ -214,8 +206,8 @@ GEX_matrix <- process_seurat_annotations(
 #gof <- "~/external_resources/hg38_gencode_v27.txt"
 
 
-sample_name <- "tumors_merge_by_sample_figure"
-annotations_file <- "~/Dropbox (PennNeurosurgery)/SilverbushLab/Projects/E20_tumor_analysis/resources/annotations_sample_vs_control_inferCNV_figure_tumors_merge.tsv"
+sample_name <- "tumors_merge_by_sample_figure_submission"
+annotations_file <- "~/Dropbox (PennNeurosurgery)/SilverbushLab/Projects/E20_tumor_analysis/resources/annotations_sample_vs_control_inferCNV_figure_tumors_merge_submission.tsv"
 out_dir_base <- "~/Dropbox (PennNeurosurgery)/SilverbushLab/Projects/E20_tumor_analysis/results/inferCNV/"
 gof <- "~/Dropbox (PennNeurosurgery)/SilverbushLab/Projects/E20_tumor_analysis/external_resources/hg38_gencode_v27.txt"
 

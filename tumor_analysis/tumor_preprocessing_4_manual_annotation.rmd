@@ -44,13 +44,10 @@ create_UMAP <- function(seurat_obj, sample_name, num_pcs, res = 0.25, umap_dir =
   #p2 <- DimPlot(seurat_obj, reduction = "umap", group.by = "cell_type_manual_refined", label = TRUE) + ggtitle(sample_name)
   #ggsave(filename = file.path(umap_dir, paste0("UMAP_", sample_name, "_cell_type_manual_refined")),
   #       plot = p2, dpi = 150, height = 10, width = 12)
-
-  # Save the processed Seurat object
-  #saveRDS(seurat_obj, file.path(processed_data_dir, paste0(sample_name, "_processed_dimreduction.rds")))
   print(p1)
 
   # Print message indicating completion
-  print(paste("UMAP and clustering completed and files saved for:", sample_name))
+  print(paste("UMAP and clustering completed for:", sample_name))
 
   # Return the updated Seurat object
   return(seurat_obj)
@@ -59,7 +56,7 @@ create_UMAP <- function(seurat_obj, sample_name, num_pcs, res = 0.25, umap_dir =
 
 # function to plot markers
 ```{r}
-plot_marker_umaps <- function(seurat_obj, marker_csv, samplename = "sample") {
+plot_marker_umaps <- function(seurat_obj, marker_csv, samplename = "sample", path_out) {
   # Load marker gene list
   marker_df <- read_csv(marker_csv)
   
@@ -100,31 +97,13 @@ plot_marker_umaps <- function(seurat_obj, marker_csv, samplename = "sample") {
   final_plot <- wrap_plots(plotlist = plot_list, ncol = ncol)
   
   # Save
-  jpg_filename <- paste0("~/results/annotation/umap_markers_", samplename, ".jpg")
+  jpg_filename <- paste0(path_out, '/', samplename, ".jpg")
   ggsave(jpg_filename, final_plot, width = 4 * ncol, height = 3 * nrow)
   
   message("Saved plot to: ", jpg_filename)
+  return(final_plot)
 }
 ```
-
-# Extract protein coding genes from biomart
-```{r}
-# Connect to Ensembl
-ensembl <- useEnsembl(biomart = "genes", dataset = "hsapiens_gene_ensembl", mirror = "www")
-df <- ensembl@attributes %>% head()
-
-# Get all protein-coding gene symbols
-protein_coding_genes <- getBM(
-  attributes = c("hgnc_symbol"),
-  filters = "biotype",
-  values = "protein_coding",
-  mart = ensembl
-) %>% 
-  pull("hgnc_symbol")
-
-```
-
-
 
 ```{r}
 sample_name <- "tumors_merged"
@@ -132,39 +111,20 @@ sample_name <- "tumors_merged"
 
 #import filtered/preprocessed seurat objects
 ```{r}
-path <- "~/processed_data/"
-srt_merge <- readRDS(paste0(path, "tumors_normalized_merged_scaled_dimreduction_srt.rds"))
-```
-
-# automatically find markers to ID clusters
-```{r}
-# filter seurat object to include only protein-coding genes
-srt_merge_pc <- srt_merge[protein_coding_genes,]
-
-marker_genes_auto <- FindAllMarkers(srt_merge_pc,
-                                    only.pos = TRUE,
-                                    min.pct = 0.25,
-                                    group.by = "seurat_clusters")
-
-rm(srt_merge_pc)
-
-topmarkers <- marker_genes_auto %>% 
-  group_by(cluster) %>%
-  slice_max(order_by = avg_log2FC, n = 20, with_ties = FALSE) %>%
-  ungroup()
-
-write_tsv(topmarkers, "~/results/annotation/FindAllMarkers/FindAllMarkers_Tumors_allcells_merged_by_clusters.tsv")
+#srt_merge <- readRDS("~/processed_data/tumors_normalized_merged_scaled_dimreduction_srt_submission.rds"))
 ```
 
 ```{r}
-VlnPlot(srt_merge, features = c("nFeature_RNA", "nCount_RNA"), alpha = 0.1, pt.size = 0.3,
-        group.by = "seurat_clusters")
+markers_path <- "~/resources/cell_type_markers_for_multi_marker_UMAP.csv"
+
+plot_marker_umaps(srt_merge, markers_path, samplename = "UMAP_annotation_tumors_merged_", path_out = "~/results")
 ```
+
 
 # import manual cluster-cell type annotations
 ```{r}
 annotation_path_base <- "~/resources/manual_annotations/"
-annotations.df <- read_csv(paste0(annotation_path_base, "annotation_", sample_name, ".csv"))
+annotations.df <- read_csv(paste0(annotation_path_base, "annotation_", sample_name, "_submission.csv"))
 
 clusters <- srt_merge$seurat_clusters
 celltypes <- annotations.df$cell_type[match(clusters, annotations.df$seurat_cluster)] # use the match function to add manually called cell types for each cluster to each cell.
@@ -174,20 +134,8 @@ srt_merge@meta.data$cell_type_manual %>% table()
 ```
 
 
-```{r}
-path_out <- "~/results/dimreduction/umap/"
-
-plot <- DimPlot(srt_merge, 
-                reduction = "umap",
-                group.by = "cell_type_manual")
-ggsave(paste0(path_out,"UMAP_", sample_name, "_celltypes_manual.jpg"))
-print(plot)
-
-```
-
-
 # Annotation dotplot for all cells
-```{r, fig.width = 8, fig.height = 5, dpi = 180}
+```{r }
 # output directory
 srt_merge@meta.data$cell_type_manual %>% table()
 out_dir <- "~/results/annotation/"
@@ -198,31 +146,13 @@ marker_genes <- unique(markers_df$marker)
 marker_genes <- factor(marker_genes, levels = marker_genes)
 
 # Define the desired cell type order
-#desired_order <- c("Malignant", "Neuron", "Glia", "B cell", "T cell", "Microglia", "Mono/Mac", "Endothelial")
-desired_order <- c("Malignant", "Neuron", "Glial cell", "Lymphoid", "Myeloid", "Endothelial", "Ambiguous")
+desired_order <- c("Malignant", "Neuron", "Glial cell", "Lymphoid", "Myeloid", "Endothelial", "Mixed lymphoid-myeloid")
 srt_merge@meta.data$cell_type_manual <- factor(srt_merge@meta.data$cell_type_manual, levels = desired_order)
 
 plot <- DotPlot(srt_merge,  features = marker_genes, group.by= 'cell_type_manual', dot.scale = 6, cluster.idents = FALSE) + RotatedAxis()
-ggsave("~/results/annotation/DotPlot_AllCells_GeneralMarkers.jpg", plot = plot)
+#ggsave("~/results/annotation/DotPlot_AllCells_GeneralMarkers.jpg", plot = plot)
 plot
 ```
-
-# automatically find markers to confirm clusters for full object - marker genes for cell type
-```{r}
-marker_genes_auto <- FindAllMarkers(srt_merge,
-                                    only.pos = TRUE,
-                                    min.pct = 0.25,
-                                    group.by = "cell_type_manual")
-
-topmarkers <- marker_genes_auto %>% 
-  group_by(cluster) %>%
-  slice_max(order_by = avg_log2FC, n = 50, with_ties = FALSE) %>%
-  ungroup()
-
-write_tsv(topmarkers, "~/resources/FindAllMarkers_Tumors_allcells_merged_by_celltype.tsv")
-
-```
-
 
 # Subcluster Lymphoid cells
 ```{r}
@@ -246,49 +176,32 @@ srt_merge_lymphoid <- ScaleData(srt_merge_lymphoid, features = c(VariableFeature
 srt_merge_lymphoid <- RunPCA(srt_merge_lymphoid, features = VariableFeatures(object = srt_merge_lymphoid))
 
 ElbowPlot(srt_merge_lymphoid)
+```
 
+```{r}
 srt_merge_lymphoid <- create_UMAP(srt_merge_lymphoid, sample_name = sample_name, 
         num_pcs = 12, res = 0.35)
 
 srt_merge_lymphoid@meta.data %>% head()
 srt_merge_lymphoid@meta.data$cell_type_manual %>% table()
 ```
-# Find T cell cluster markers
-```{r}
-lymphoid_markers <- FindAllMarkers(srt_merge_lymphoid, min.pct = 0.25, group.by = "seurat_clusters")
-topmarkers <- lymphoid_markers %>% 
-  group_by(cluster) %>%
-  slice_max(order_by = avg_log2FC, n = 20, with_ties = FALSE) %>%
-  ungroup()
 
-write_tsv(topmarkers, "~/results/annotation/FindAllMarkers/FindAllMarkers_Lymphoid_subclustered_merged.tsv")
-```
 
 ```{r}
-plot_marker_umaps(srt_merge_lymphoid, marker_csv = "~/resources/Tcell_markers_all.csv", samplename = "tumors_merged_lymphoid")
+plot_marker_umaps(srt_merge_lymphoid, marker_csv = "~/resources/Tcell_markers_all.csv", samplename = "UMAP_annotation_tumors_merged_lymphoid", path_out = "~/results")
 ```
 
 # Add manual Lymphoid annotations
 ```{r}
 sample_name <- "tumors_merged_lymphoid"
 annotation_path_base <- "~/resources/manual_annotations/"
-annotations.df <- read_csv(paste0(annotation_path_base, "annotation_", sample_name, ".csv"))
+annotations.df <- read_csv(paste0(annotation_path_base, "annotation_", sample_name, "_submission.csv"))
 
 clusters <- srt_merge_lymphoid$seurat_clusters
 celltypes <- annotations.df$cell_type[match(clusters, annotations.df$seurat_cluster)] # use the match function to add manually called cell types for each cluster to each cell.
 srt_merge_lymphoid <- AddMetaData(srt_merge_lymphoid, celltypes, col.name = "cell_type_manual_refined")
 srt_merge_lymphoid@meta.data$cell_type_manual_refined %>% table()
 ```
-
-
-# Plot over UMAP 
-```{r}
-p <- DimPlot(srt_merge_lymphoid, reduction = "umap", group.by = "cell_type_manual_refined")
-ggsave("~/results/dimreduction/umap/UMAP_tumors_merged_lymphoid_cell_type_manual_refined.jpg", plot = p)
-p
-```
-
-
 
 # Lymphoid cell annotation dot plot
 ```{r}
@@ -299,11 +212,11 @@ marker_genes <- factor(marker_genes, levels = marker_genes)
 
 srt_merge_lymphoid@meta.data$cell_type_manual_refined %>% table()
 
-desired_order <- c("CD8 T cell", "CD4 T cell", "Regulatory T cell", "Proliferating T cell", "NK cell")
+desired_order <- c("CD8 T cell", "CD4 T cell", "Regulatory T cell", "Cycling lymphoid cell", "NK cell")
 srt_merge_lymphoid@meta.data$cell_type_manual_refined <- factor(srt_merge_lymphoid@meta.data$cell_type_manual_refined, levels = desired_order)
 
 plot <- DotPlot(srt_merge_lymphoid,  features = marker_genes, group.by= 'cell_type_manual_refined', dot.scale = 6, cluster.idents = FALSE) + RotatedAxis()
-ggsave("~/results/annotation/DotPlot_Lymphoid_GeneralMarkers.jpg", plot = plot)
+#ggsave("~/results/annotation/DotPlot_Lymphoid_GeneralMarkers.jpg", plot = plot)
 plot
 ```
 
@@ -336,23 +249,17 @@ srt_merge$cell_type_manual_refined[matching_cells] <- lymphoid_annotations$cell_
 
 # and plot over UMAP to be sure:
 plot <- DimPlot(srt_merge, group.by = "cell_type_manual_refined")
-ggsave(plot = plot, filename = "~/results/dimreduction/umap/UMAP_tumors_merged_celltypes_manual_withLymphoid.jpg")
+#ggsave(plot = plot, filename = "~/results/dimreduction/umap/UMAP_tumors_merged_celltypes_manual_withLymphoid.jpg")
 plot
 ```
 
 
 ```{r}
-# only run this once! Takes a long time
-saveRDS(srt_merge, "~/processed_data/tumors_normalized_merged_scaled_dimreduction_annotated_srt.rds")
+DimPlot(srt_merge, group.by = "cell_type_manual_refined")
 ```
+
 
 # Subcluster myeloid cells
-
-```{r}
-srt_merge <- readRDS("~/processed_data/tumors_normalized_merged_scaled_dimreduction_annotated_srt.rds") # only do if necessary
-
-srt_merge$cell_type_manual_refined %>% table()
-```
 
 ```{r}
 srt_merge_myeloid <- subset(srt_merge, cell_type_manual %in% c("Myeloid"))
@@ -383,38 +290,22 @@ plot
 From elbow plot, use 10 PCs
 ```{r}
 srt_merge_myeloid <- create_UMAP(srt_merge_myeloid, sample_name = sample_name, 
-        num_pcs = 10, res = 0.25)
+        num_pcs = 10, res = 0.35)
 
 srt_merge_myeloid@meta.data %>% head()
 ```
 
 ```{r}
-DimPlot(srt_merge_myeloid, group.by = "cell_type_manual_refined")
+plot_marker_umaps(srt_merge_myeloid, "~/resources/Myeloid_markers_all.csv", samplename = "UMAP_annotation_tumors_merged_myeloid", path_out = "~/results/")
 ```
 
-
-```{r}
-plot_marker_umaps(srt_merge_myeloid, "~/resources/Myeloid_markers_all.csv", samplename = "tumors_merged_myeloid")
-```
-
-# Find myeloid markers
-```{r}
-myeloid_markers <- FindAllMarkers(srt_merge_myeloid, group.by = "seurat_clusters")
-
-myeloid_markers_top <- myeloid_markers %>%
-  group_by(cluster) %>%
-  slice_max(order_by = avg_log2FC, n = 20) %>%
-  ungroup()
-
-write_tsv(myeloid_markers_top, file = "~/results/annotation/FindAllMarkers/FindAllMarkers_Myeloid_subclustered_merged.tsv")
-```
 
  
 # Add manual myeloid annotations
 ```{r}
 sample_name <- "tumors_merged_myeloid"
 annotation_path_base <- "~/resources/manual_annotations/"
-annotations.df <- read_csv(paste0(annotation_path_base, "annotation_", sample_name, ".csv"))
+annotations.df <- read_csv(paste0(annotation_path_base, "annotation_", sample_name, "_submission.csv"))
 
 clusters <- srt_merge_myeloid$seurat_clusters
 celltypes <- annotations.df$cell_type[match(clusters, annotations.df$seurat_cluster)] # use the match function to add manually called cell types for each cluster to each cell.
@@ -426,7 +317,7 @@ srt_merge_myeloid@meta.data$cell_type_manual_refined %>% table()
 # Plot over UMAP 
 ```{r}
 p <- DimPlot(srt_merge_myeloid, reduction = "umap", group.by = "cell_type_manual_refined")
-ggsave("~/results/dimreduction/umap/UMAP_tumors_merged_myeloid_cell_type_manual_refined.jpg", plot = p)
+#ggsave("~/results/dimreduction/umap/UMAP_tumors_merged_myeloid_cell_type_manual_refined.jpg", plot = p)
 p
 ```
 
@@ -440,12 +331,12 @@ marker_genes <- factor(marker_genes, levels = marker_genes)
 srt_merge_myeloid@meta.data$cell_type_manual_refined %>% table()
 unique(srt_merge_myeloid$cell_type_manual_refined)
 
-desired_order <- c("Macrophage", "Monocyte", "pDC", "Plasma cells", "Proliferating myeloid cells", "Ambiguous")
+desired_order <- c("Macrophage", "Monocyte", "pDC", "Plasma cell", "Cycling myeloid cell")
 
 srt_merge_myeloid@meta.data$cell_type_manual_refined <- factor(srt_merge_myeloid@meta.data$cell_type_manual_refined, levels = desired_order)
 
 plot <- DotPlot(srt_merge_myeloid,  features = marker_genes, group.by= 'cell_type_manual_refined', dot.scale = 6, cluster.idents = FALSE) + RotatedAxis()
-ggsave("~/results/annotation/DotPlot_Myeloid_GeneralMarkers.jpg", plot = plot, width = 10, height = 5)
+#ggsave("~/results/annotation/DotPlot_Myeloid_GeneralMarkers.jpg", plot = plot, width = 10, height = 5)
 plot
 ```
 
@@ -468,12 +359,25 @@ srt_merge$cell_type_manual_refined %>% table()
 
 ```{r}
 plot <- DimPlot(srt_merge, group.by = "cell_type_manual_refined")
-ggsave(filename = "~/results/dimreduction/umap/UMAP_tumors_merged_celltypes_manual_with_Lymphoid_Myeloid.jpg")
+#ggsave(filename = "~/results/dimreduction/umap/UMAP_tumors_merged_celltypes_manual_with_Lymphoid_Myeloid.jpg")
 plot
 ```
 
-# save final annotated rds objecty
+# Add useful metadata
 ```{r}
-saveRDS(srt_merge, file = "~/processed_data/tumors_normalized_merged_scaled_dimreduction_annotated_srt.rds")
+sample_name <- gsub("_", " ", srt_merge$orig.ident)
+srt_merge <- AddMetaData(srt_merge, sample_name, col.name = "sample_name")
+
+patient <- srt_merge@meta.data$sample_name %>% word()
+srt_merge <- AddMetaData(srt_merge, patient, col.name = "patient")
+
+Timepoint <- ifelse(grepl("Pre", srt_merge$sample_name), "Pre", "Post")
+srt_merge <- AddMetaData(srt_merge, Timepoint, col.name = "Timepoint")
+```
+
+
+# save final annotated rds objects
+```{r}
+#saveRDS(srt_merge, file = "~/processed_data/tumors_normalized_merged_scaled_dimreduction_annotated_srt_submission.rds")
 ```
 

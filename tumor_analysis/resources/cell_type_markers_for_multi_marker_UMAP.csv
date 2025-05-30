@@ -1,0 +1,18 @@
+﻿cell_type,marker
+Neuron,RBFOX3
+Glial cell,S100B
+Glial cell,OLIG2
+Leukocyte,PTPRC
+T cell,CD3D
+CD8 T cell,CD8A
+CD4 T cell,CD40LG
+Treg,FOXP3
+NK cell,NCR1
+Plasma cell,IGHD
+Myeloid,CD68
+Monocyte,VCAN
+Macrophage,APOE
+Macrophage,MS4A4A
+pDC,LILRA4
+Endothelial cell,PECAM1
+Proliferating cell,MKI67

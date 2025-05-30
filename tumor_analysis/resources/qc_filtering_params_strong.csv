@@ -1,0 +1,7 @@
+﻿sample,min_features,max_features,min_counts,max_counts
+P1_Pre,1000,7500,1500,35000
+P1_Post,750,5500,2000,35000
+P4_Pre,750,6500,2000,27500
+P4_Post,1000,6000,2000,40000
+P7_Pre,1000,5000,3000,25000
+P7_Post,750,7000,1000,35000
