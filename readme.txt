@@ -1,5 +1,7 @@
 CSF and infusion product analysis:
 
+Fastq files can be obtained from the GEO repository with the accession code GSE296419. This repository contains raw fastq files, Cellbender-processed count matrices, and cell type annotations. 
+
 A Docker image is available which generates an environment suitable for running all code for generating CSF and infusion-product related figures. This can be accessed at the Silverbush Lab DockerHub account (https://hub.docker.com/repository/docker/silverbushdana/jupyter_seurat_infercnv_v2/general) or use: 
 
 docker pull silverbushdana/jupyter_seurat_infercnv_v2
