@@ -21,6 +21,7 @@ ENV RETICULATE_MINICONDA_ENABLED=FALSE
 # r-cran-rjags IS KEY HERE.
 # do not install jags from source and do not use libjags-dev!
 
+
 RUN apt-get update && apt-get install -y \
     libhdf5-dev \
     libcurl4-openssl-dev \
