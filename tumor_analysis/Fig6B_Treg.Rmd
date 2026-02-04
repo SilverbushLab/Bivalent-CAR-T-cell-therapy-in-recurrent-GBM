@@ -34,6 +34,7 @@ srt_merge <- AddMetaData(srt_merge, Timepoint, col.name = "Timepoint")
 srt_merge$sample_name %>% table()
 srt_merge$Timepoint %>% table()
 srt_merge$patient %>% table()
+
 ```
 
 # Plot immune cell types of interest by patient as a fraction of total immune cells

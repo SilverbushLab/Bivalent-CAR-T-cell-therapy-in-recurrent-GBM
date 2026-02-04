@@ -15,6 +15,7 @@ Preprocessing files for CSF and infusion product samples should be run in the fo
 
 Tumor analysis: 
 
+
 Code for tumor cell analysis is run separately from the CSF and Infusion Product analysis.
 
 Use the included dockerfile in "Dockerfile_tumor_analysis" create an environment containing required packages. This includes both R and python packages. Alternatively, the corresponding image can be obtained from the Silverbush Lab DockerHub page (https://hub.docker.com/repository/docker/silverbushdana/e20_with_rstudio_jupyter_updated/general) using:
