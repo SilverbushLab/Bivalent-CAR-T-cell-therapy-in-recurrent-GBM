@@ -1,0 +1,234 @@
+---
+title: "E20_Script6_Manual_Annotation"
+output: html_document
+date: "2025-04-01"
+---
+
+```{r}
+# for presto:
+#devtools::install_github("immunogenomics/presto")
+```
+
+
+```{r}
+library(Seurat)
+library(readr)
+library(tibble)
+library(dplyr)
+library(viridis)
+library(presto) # used to greatly improve FindAllMarkers efficiency
+```
+
+# define funcitons
+```{r}
+# Define a function to run UMAP
+create_UMAP <- function(seurat_obj, sample_name, num_pcs, res = 0.25) {
+
+  # Find neighbors and clusters
+  seurat_obj <- FindNeighbors(seurat_obj, dims = 1:num_pcs)
+  seurat_obj <- FindClusters(seurat_obj, resolution = res)
+  
+  # Print cluster assignments for verification
+  print(paste("Clusters for", sample_name, ":"))
+  print(head(Idents(seurat_obj)))
+  
+  # Run UMAP
+  seurat_obj <- RunUMAP(seurat_obj, dims = 1:num_pcs)
+
+  # Save UMAP plots with different groupings
+  #p1 <- DimPlot(seurat_obj, reduction = "umap", group.by = "seurat_clusters", label = TRUE) + ggtitle(sample_name)
+  #print(p1)
+
+  # Print message indicating completion
+  print(paste("UMAP and clustering completed for:", sample_name))
+
+  # Return the updated Seurat object
+  return(seurat_obj)
+}
+```
+
+# function to plot markers
+```{r}
+plot_marker_umaps <- function(seurat_obj, marker_csv, samplename = "sample", path_out) {
+  # Load marker gene list
+  marker_df <- read_csv(marker_csv)
+  
+  # Validate columns
+  if (!all(c("cell_type", "marker") %in% colnames(marker_df))) {
+    stop("CSV must contain 'cell_type' and 'marker' columns")
+  }
+  
+  # Drop NA or blank marker entries
+  marker_df <- marker_df[!is.na(marker_df$marker) & marker_df$marker != "", ]
+  
+  plot_list <- list()
+
+  # First: Add UMAP with Seurat cluster identity
+  cluster_plot <- DimPlot(seurat_obj, reduction = "umap", label = TRUE, pt.size = 0.5) +
+    ggtitle("Clusters")
+  plot_list[[1]] <- cluster_plot
+
+  # Then: Add FeaturePlots for each marker
+  for (i in seq_len(nrow(marker_df))) {
+    marker <- marker_df$marker[i]
+    cell_type <- marker_df$cell_type[i]
+    
+    if (marker %in% rownames(seurat_obj)) {
+      p <- FeaturePlot(seurat_obj, features = marker, reduction = "umap", pt.size = 0.25, order = TRUE) +
+        ggtitle(paste0(cell_type, ": ", marker))
+    } else {
+      p <- ggplot() + 
+        theme_void() + 
+        ggtitle(paste0(cell_type, ": ", marker, " (not found)"))
+    }
+    plot_list[[i + 1]] <- p  # shift index by 1 to account for cluster plot
+  }
+  
+  # Layout: adjust ncol to control grid width
+  ncol <- 6
+  nrow <- ceiling(length(plot_list) / ncol)
+  final_plot <- wrap_plots(plotlist = plot_list, ncol = ncol)
+  
+  # Save
+  jpg_filename <- paste0(path_out, '/', samplename, ".jpg")
+  ggsave(jpg_filename, final_plot, width = 4 * ncol, height = 3 * nrow)
+  
+  message("Saved plot to: ", jpg_filename)
+  return(final_plot)
+}
+```
+
+```{r}
+set.seed(1234)
+```
+
+#import filtered/preprocessed seurat objects
+```{r}
+srt_merge <- readRDS("~/processed_data/tumors_normalized_merged_scaled_dimreduction_srt_revision.rds")
+```
+
+```{r}
+markers_path <- "~/resources/cell_type_markers_for_multi_marker_UMAP.csv" # this is a file containing the markers and associated cell type. Change only if you want new markers.
+
+plot_marker_umaps(srt_merge, markers_path, samplename = "UMAP_annotation_tumors_revisions_test", path_out = "~/results")
+```
+
+
+# import manual cluster-cell type annotations
+```{r}
+annotations.df <- read_csv("~/resources/manual_annotations/annotation_tumors_all_revision.csv")
+
+clusters <- srt_merge$seurat_clusters
+celltypes <- annotations.df$cell_type[match(clusters, annotations.df$seurat_cluster)] # use the match function to add manually called cell types for each cluster to each cell.
+srt_merge <- AddMetaData(srt_merge, celltypes, col.name = "cell_type_manual")
+
+srt_merge@meta.data$cell_type_manual %>% table()
+srt_merge
+DimPlot(srt_merge, group.by = "cell_type_manual")
+```
+
+# export to inferCNV before proceeding to validate malignant cell calls.
+takes a long time. run only when necessary.
+```{r}
+
+# saveRDS(srt_merge, "~/processed_data/tumors_normalized_merged_scaled_annotated_coarse_srt_revision.rds")
+```
+
+```{}
+Some malig cell calls are spurious in P16 post. Subcluster P16 and re-assess.
+```
+
+# subset to P16 Post
+
+```{r}
+srt_P16_Post <- readRDS("~/processed_data/tumors_normalized_merged_scaled_annotated_coarse_srt_revision_P16_Post.rds")
+```
+
+```{r}
+srt_P16_Post <- subset(srt_merge, subset = sample_name == "P16_Post")
+# check cell type distribution
+DimPlot(srt_P16_Post, group.by = "cell_type_manual")
+srt_P16_Post$cell_type_manual %>% table()
+```
+
+# Find variable features and scale merged dataset
+It is necessary to find variable features and scale after merging as the merge alters these values
+```{r}
+markers_df <- read_csv("~/resources/cell_type_markers_all.csv")
+genes_to_scale <- markers_df$marker
+
+processed_data_dir <- "~/processed_data/"
+
+# Find variable features
+srt_P16_Post <- FindVariableFeatures(srt_P16_Post, selection.method = "vst", nfeatures = 2000)
+
+# Scale data - R crashes if you try to scale with all features. So only scale variable features and genes_to_scale for later annotation.
+srt_P16_Post <- ScaleData(srt_P16_Post, features = c(VariableFeatures(srt_P16_Post), genes_to_scale), vars.to.regress = c("nCount_RNA", "nFeature_RNA")) 
+```
+
+
+```{r}
+# Define results directory
+dimreduction_dir <- "~/results/dimreduction/pca/"
+sample <- "tumor_filtered_processed_annotated_P16_post"
+
+# Run PCA
+srt_P16_Post <- RunPCA(srt_P16_Post, features = VariableFeatures(object = srt_P16_Post))
+
+# Save ElbowPlot
+p4 <- ElbowPlot(srt_P16_Post)
+print(p4)
+```
+
+From the elbowplot, ideal number of dimensions is:
+7
+```{r}
+# use the function for each object
+srt_P16_Post <- create_UMAP(srt_P16_Post, "merged_filtered_processed_revision_P16_Post", res = 0.5, num_pcs =  6)
+```
+
+
+```{r}
+p1 <- DimPlot(srt_P16_Post, reduction = "umap", group.by = "seurat_clusters", label = TRUE)
+#ggsave(filename = "~/results/dimreduction/umap/UMAP_merged_filtered_processed_revision_seurat_clusters_P16_Post.jpg",
+         plot = p1, dpi = 150, height = 10, width = 10)
+p1
+```
+
+```{r}
+markers_path <- "~/resources/cell_type_markers_for_multi_marker_UMAP.csv" # this is a file containing the markers and associated cell type. Change only if you want new markers.
+plot_marker_umaps(srt_P16_Post, markers_path, samplename = "UMAP_annotation_tumors_revisions_P16_Post", path_out = "~/results")
+```
+
+```{r}
+meta <- srt_P16_Post@meta.data
+FeaturePlot(srt_P16_Post, features = "EGFR")
+FeaturePlot(srt_P16_Post, features = "nCount_RNA")
+FeaturePlot(srt_P16_Post, features = "nFeature_RNA")
+
+```
+
+# import manual cluster-cell type annotations - P16 Post
+```{r}
+annotations.df <- read_csv(paste0("~/resources/annotation_tumors_P16_post_revision.csv"))
+
+clusters <- srt_P16_Post$seurat_clusters
+celltypes <- annotations.df$cell_type[match(clusters, annotations.df$seurat_cluster)] # use the match function to add manually called cell types for each cluster to each cell.
+srt_P16_Post <- AddMetaData(srt_P16_Post, celltypes, col.name = "cell_type_manual")
+
+srt_P16_Post@meta.data$cell_type_manual %>% table()
+```
+
+```{r}
+markers_11 <- FindMarkers(srt_P16_Post, ident.1 = "11") %>%
+  rownames_to_column(var = "geneID")
+
+write_tsv(markers_11, "~/results/P16_post_markers_clust_11.tsv")
+```
+
+
+```{r}
+# export to validate in inferCNV
+saveRDS(srt_P16_Post, file = "~/processed_data/tumors_normalized_merged_scaled_annotated_coarse_srt_revision_P16_Post.rds")
+```
+

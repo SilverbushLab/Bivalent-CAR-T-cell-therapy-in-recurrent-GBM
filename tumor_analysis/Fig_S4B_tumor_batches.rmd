@@ -1,0 +1,80 @@
+---
+title: "Fig_S4B"
+output: html_document
+date: "2026-02-17"
+---
+
+```{r}
+library(Seurat)
+library(tidyr)
+library(ggplot2)
+library(ggpubr)
+library(dplyr)
+library(harmony)
+library(purrr)
+library(cowplot)
+library(rstatix)
+library(ggbeeswarm)
+library(ggbreak)
+```
+
+# Set up and adjust metadata
+```{r}
+srt_merge <- readRDS("~/path/to/tumor/seurat/object")
+#srt_merge <- readRDS("~/processed_data/tumors_normalized_scaled_dimreduction_annotated_refined_miller_with_malig_states_srt_revision.rds")
+srt_merge$sample_name <- gsub("_", " ", srt_merge$sample_name) # remove underscore from sample name
+```
+
+
+```{r}
+# set up batches:
+batches <- case_when(srt_merge$sample_name == "P7 Post" ~ "Library batch 1",
+                     srt_merge$sample_name == "P7 Pre" ~ "Library batch 2",
+                     srt_merge$sample_name %in% c("P4 Pre", "P4 Post") ~ "Library batch 3",
+                     srt_merge$sample_name %in% c("P1 Pre", "P1 Post") ~ "Library batch 4",
+                     srt_merge$sample_name == "P16 Post" ~ "Library batch 5",
+                     srt_merge$sample_name %in% c("P13 Pre", "P13 Post") ~ "Library batch 6",
+                     srt_merge$sample_name == "P14 Post" ~ "Library batch 7")
+
+srt_merge <- AddMetaData(srt_merge, batches, col.name = "batch")
+srt_merge$batch %>% table()
+```
+
+# Plot batches over UMAP
+```{r}
+# suppose we want separate plots for each batch
+umap_df <- as.data.frame(Embeddings(srt_merge, "umap")) %>%
+  rownames_to_column("cell_id") %>%
+  left_join(srt_merge@meta.data %>% rownames_to_column("cell_id"), by = "cell_id")
+
+cols <- c(
+  "Library batch 1" = "#1F77B4",  # bright sky blue
+  "Library batch 2" = "#FF7F0E",  # vivid orange
+  "Library batch 3" = "#2CA02C",  # bright green
+  "Library batch 4" = "#D62728",  # strong red
+  "Library batch 5" = "#9467BD",  # bright purple
+  "Library batch 6" = "#E377C2",  # magenta-pink
+  "Library batch 7" = "#17BECF"   # cyan / teal
+)
+
+batch_levels <- names(cols)
+
+plots <- map(batch_levels, function(b) {
+  ggplot() +
+    geom_point(data = umap_df, aes(x = umap_1, y = umap_2), color = "gray90", size = 0.5) +
+    geom_point(data = filter(umap_df, batch == b), 
+               aes(x = umap_1, y = umap_2, color = batch), size = 0.6) +
+    scale_color_manual(values = cols) +
+    ggtitle(paste(b)) +
+    theme_bw() +
+    theme(
+      plot.title = element_text(hjust = 0.5, face = "bold"),
+      legend.position = "none",
+      panel.grid = element_blank()
+    )
+})
+
+p <- plot_grid(plotlist = plots, ncol = 3)
+#ggsave("/your/path/TumorCells_colored_by_LP_batch_faceted.pdf", plot = p, width = 7, height = 7)
+p
+```

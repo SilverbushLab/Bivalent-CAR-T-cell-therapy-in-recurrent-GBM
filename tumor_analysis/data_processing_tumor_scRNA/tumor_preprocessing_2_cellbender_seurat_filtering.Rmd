@@ -1,0 +1,412 @@
+---
+title: "Sample_Import_Preprocessing after cellbender and scrublet"
+output: html_document
+date: "2024-12-24"
+---
+
+Import and process myelin-depleted and control mechanically dissociated single cell 5' gene expression sequenced GBM samples. Input is cellbender output with fpr 0.0. This does not automatically filter any cells. Cells here will be filtered with scrublet outputs (Script 1, python). 
+
+```{r}
+library(Seurat)
+library(dplyr)
+library(ggplot2)
+library(readr)
+library(stringr)
+library(patchwork)
+library(rhdf5)
+library(SeuratDisk)
+library(scCustomize)
+library(Matrix)
+library(scales)
+
+```
+
+# Load in functions
+```{r}
+qc_filter_seurat <- function(srt_obj,
+                             sample_name = "sample",
+                             min_features = 500,
+                             max_features = 8000,
+                             min_counts = 1000,
+                             max_counts = 50000,
+                             max_percent_mt = 10,
+                             output_dir = "~/results/qc/") {
+  
+  print(paste0("Running QC for: ", sample_name))
+  
+  # Calculate percent mitochondrial gene content
+  print("calculating percent mt")
+  srt_obj[["percent.mt"]] <- PercentageFeatureSet(srt_obj, pattern = "^MT-")
+  
+  # --- Optional: Remove outliers from nCount_RNA for plotting ---
+  print("removing outliers from nCount_RNA for plotting")
+  counts <- srt_obj$nCount_RNA
+  upper_bound <- quantile(counts, 0.99)
+  plot_obj <- subset(srt_obj, subset = nCount_RNA < upper_bound)
+  
+  # --- Pre-filter Violin Plot ---
+  print("making qc violin plot pre-filter")
+  vln_list <- lapply(c("nFeature_RNA", "nCount_RNA", "percent.mt"), function(f) {
+    VlnPlot(plot_obj, features = f, pt.size = 0.3, alpha = 0.1) +
+    scale_y_continuous(breaks = pretty_breaks(n = 7)) +
+    theme(legend.position = "none") 
+  })
+  
+  # Combine with patchwork
+  print("combining violin plots pre-filter")
+  pre_vln <- wrap_plots(vln_list, ncol = 3) +
+  plot_annotation(title = paste0("Pre-filter: ", sample_name))
+
+  # --- Apply filtering ---
+  print("unfiltered qc data:")
+  print(paste0("nFeatures_RNA: ", mean(srt_obj$nFeature_RNA)))
+  print(paste0("nCount_RNA: ", mean(srt_obj$nCount_RNA)))
+  print(paste0("percent.mt: ", mean(srt_obj$percent.mt)))
+  
+  print("Filter params:")
+  print(paste0("min_features: ", mean(min_features)))
+  print(paste0("max_features: ", mean(max_features)))
+  print(paste0("min_counts: ", mean(min_counts)))
+  print(paste0("max_counts: ", mean(max_counts)))
+  print(paste0("max_percent_mt: ", mean(max_percent_mt)))
+  
+  print("filtering seurat objects")
+  srt_filtered <- subset(srt_obj,
+                         subset = nFeature_RNA > min_features &
+                                  nFeature_RNA < max_features &
+                                  nCount_RNA > min_counts &
+                                  nCount_RNA < max_counts &
+                                  percent.mt < max_percent_mt)
+  
+  # --- Post-filter Violin Plot ---
+  print("making qc violin plot post-filter")
+  vln_list <- lapply(c("nFeature_RNA", "nCount_RNA", "percent.mt"), function(f) {
+    VlnPlot(srt_filtered, features = f, pt.size = 0.3, alpha = 0.1) +
+    scale_y_continuous(breaks = pretty_breaks(n = 7)) +
+    theme(legend.position = "none") 
+  })
+  
+  print("combining violin plots pre-filter")
+  post_vln <- wrap_plots(vln_list, ncol = 3) +
+  plot_annotation(title = paste0("Post-filter: ", sample_name))
+  
+  # --- Combine and save the plots ---
+  print("combining violin plots pre and post-filter")
+  combined_vln <- pre_vln / post_vln  # Vertical stacking with patchwork
+  ggsave(filename = paste0(output_dir, "qc_violin_", sample_name, ".jpg"),
+         plot = combined_vln, width = 12, height = 10)
+  print(combined_vln)
+
+  # --- Scatterplots before filtering ---
+  print("create FeatureScatter plots")
+  p1 <- FeatureScatter(srt_obj, feature1 = "nCount_RNA", feature2 = "percent.mt")
+  p2 <- FeatureScatter(srt_obj, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+  plot_combined <- p1 + p2
+  ggsave(filename = paste0(output_dir, "featurescatter_prefilter_", sample_name, ".jpg"),
+         plot = plot_combined, width = 12, height = 6)
+  
+  message("QC complete for: ", sample_name)
+  return(srt_filtered)
+}
+```
+
+# Define sample names
+```{r}
+sample_names <- c("P1_Pre",
+                  "P1_Post",
+                  "P4_Pre",
+                  "P4_Post",
+                  "P7_Pre",
+                  "P7_Post",
+                  "P13_Pre",
+                  "P13_Post",
+                  "P14_Post",
+                  "P16_Post")
+```
+
+# First import post-cellbender counts
+```{r}
+# Base directory where cellbender counts are stored
+base_dir <- "~/processed_data/cellbender"
+
+#Initialize empty list to store seurat objects
+seurat_objects_cellbender <- list()
+
+# Loop through each sample name and process it
+for (sample in sample_names) {
+  
+  # Construct the full path dynamically
+  sample_path <- file.path(base_dir, sample, "cellbender_output_FPR_0.0_filtered_seurat.h5")
+
+  # Check if the file exists before proceeding
+  if (file.exists(sample_path)) {
+    print(sample_path)
+    # now import and construct seurat object
+    seurat_obj <- CreateSeuratObject(counts = Read10X_h5(sample_path),
+                                     project = sample)
+    seurat_objects_cellbender[[sample]] <- seurat_obj
+  } else {
+    warning(paste("File not found:", sample_path))
+  }
+}
+
+# Check the list of Seurat objects
+seurat_objects_cellbender
+
+```
+
+# get number of cells for each sample pre-filter
+```{r}
+nCells_pre_filter <- lapply(seurat_objects_cellbender, ncol)
+names(nCells_pre_filter) <- names(seurat_objects_cellbender)
+nCells_pre_filter
+```
+
+
+# Import scrublet doublet calls and filter cellbender output to exlude doublets
+```{r}
+base_dir <- "~/processed_data/scrublet/cell_resubmission/"
+seurat_objects_scrublet <- list()
+
+for(sample in sample_names){
+  scrublet_dir <- file.path(base_dir, sample, "scrublet_doublets.csv")
+  
+  scrublet_df <- read_csv(scrublet_dir) %>%
+    dplyr::rename("cell_id" = "...1")
+  
+  predicted_doublets <- sum(scrublet_df$predicted_doublet[!is.na(scrublet_df$predicted_doublet)])
+  
+  print(paste0("number of scrublet-predicted doublets: ", predicted_doublets))
+  
+  non_doublets <- scrublet_df %>% dplyr::filter(predicted_doublet == FALSE) %>% 
+    dplyr::pull(cell_id)
+  
+  seurat_objects_scrublet[[sample]] <- subset(seurat_objects_cellbender[[sample]], cells = non_doublets)
+  }
+```
+
+
+# import filtered cell matrices from cell ranger
+these will be cross checked with the cellbender output
+```{r}
+# Base directory where the raw data is stored
+base_dir <- "~/RawData"
+
+# Initialize an empty list to store Seurat objects
+seurat_objects_cellranger <- list()
+
+# Loop through each sample name and process it
+for (sample in sample_names) {
+  
+  # Construct the full path dynamically
+  sample_path <- file.path(base_dir, sample, sample)
+  
+  # Construct the path to the H5 file
+  h5_path <- file.path(sample_path, "filtered_feature_bc_matrix.h5")
+  
+  # Check if the file exists before proceeding
+  if (file.exists(h5_path)) {
+    # Load the counts matrix
+    counts <- Read10X_h5(h5_path)
+    # Create a Seurat object
+    seurat_obj <- CreateSeuratObject(counts = counts, 
+                                     project = sample)
+    # Store the Seurat object in the list
+    seurat_objects_cellranger[[sample]] <- seurat_obj
+    # Print a message indicating successful processing
+    print(paste("Processed:", sample))
+    
+  } else {
+    warning(paste("File not found:", h5_path))
+  }
+}
+
+# Check the list of Seurat objects
+seurat_objects_cellranger
+```
+
+# filter cellbender-processed seurat objects to cells also in the processed cellranger output
+```{r}
+seurat_objects_consensus <- list()
+for(sample in sample_names){
+  print(sample)
+  cr_cells <- colnames(seurat_objects_cellranger[[sample]])
+  seurat_objects_consensus[[sample]] <- subset(seurat_objects_scrublet[[sample]], cells = cr_cells)
+  }
+```
+
+
+# filter seurat objects manually
+```{r}
+seurat_qc <- list()
+params_df <- read_csv("path/to/resources/qc_filtering_params_strong_revisions.csv") # you have to make this file and input filtering parameters yourself
+sample_names
+
+for(sample in sample_names){
+  params <- params_df[params_df$sample == sample, ]
+
+  min_feat <- params$min_features
+  max_feat <- params$max_features
+  min_cts  <- params$min_counts
+  max_cts  <- params$max_counts
+
+  seurat_qc[[sample]] <- qc_filter_seurat(seurat_objects_consensus[[sample]], sample_name = sample,
+                                          min_features = min_feat, max_features = max_feat, 
+                                          min_counts = min_cts, max_counts = max_cts)
+  
+}
+```
+
+# summarize QC stats
+```{r}
+cb_counts <- c()
+qc_counts <- c()
+
+for(sample in sample_names){
+  cb_counts <- c(cb_counts, ncol(seurat_objects_cellbender[[sample]]))
+  qc_counts <- c(qc_counts, ncol(seurat_qc[[sample]]))
+}
+
+qc_filtering_params_stats_tumor <- tibble("sample" = sample_names,
+                                              "tissue_type" = "tumor",
+                                              "nCells_prefilter" = cb_counts,
+                                              "nCells_postfilter" = qc_counts,
+                                              "fraction_filtered" = ((cb_counts - qc_counts)/cb_counts)
+)
+params_df$max_percent_mitochondrial <- 10
+qc_filtering_params_stats_tumor <- left_join(x = params_df, qc_filtering_params_stats_tumor)
+
+```
+
+```{r}
+# save qc stats
+write_csv(qc_filtering_params_stats_tumor, file = "~/results/qc_filtering_params_results_stats_tumor_revisions.csv")
+```
+
+
+# normalize each seurat object. It is necessary to normalize each tumor separately.
+```{r}
+# Initialize a list to store fully processed Seurat objects
+seurat_normalized <- list()
+# Loop through each Seurat object to process it
+for (sample in names(seurat_qc)) {
+  print(sample)
+  # Retrieve the QC-filtered Seurat object
+  srt_obj <- seurat_qc[[sample]]
+  
+  # Normalize data
+  srt_obj <- NormalizeData(srt_obj, normalization.method = "LogNormalize", scale.factor = 10000)
+  seurat_normalized[[sample]] <- srt_obj
+  # Print success message
+  print(paste("Normalization completed for:", sample))
+}
+
+# Check the final list of processed Seurat objects
+```
+
+# remove unwanted seurat objects to clear memory
+```{r}
+rm(seurat_objects_cellbender)
+rm(seurat_objects_cellranger)
+rm(seurat_objects_consensus)
+rm(seurat_objects_scrublet)
+rm(seurat_qc)
+gc()
+```
+
+
+# Merge seurat objects and export merged obj.
+```{r}
+processed_data_dir <- "~/processed_data/"
+
+# append sample id to cell names. this avoids overlapping cell barcodes between samples
+for(sample in sample_names){
+  colnames(seurat_normalized[[sample]]) <- paste(colnames(seurat_normalized[[sample]]), seurat_normalized[[sample]]$orig.ident, sep = "_")
+}
+
+# merge
+srt_merge <- merge(
+  x = seurat_normalized[[1]],
+  y = seurat_normalized[2:length(seurat_normalized)],
+  merge.data = TRUE
+)
+
+# In Seurat v5 you have to manually join all the layers.
+# separately join normalized layers (data) and raw counts "counts"
+counts_layers <- grep("^counts", Layers(srt_merge), value = TRUE)
+norm_layers <- grep("^data", Layers(srt_merge), value = TRUE)
+counts_layers
+norm_layers
+
+srt_merge <- JoinLayers(srt_merge)
+Layers(srt_merge)
+
+```
+
+
+# Find variable features and scale merged dataset
+It is necessary to find variable features and scale after merging as the merge alters these values
+```{r}
+markers_df <- read_csv("~/resources/cell_type_markers_all.csv")
+genes_to_scale <- markers_df$marker
+
+processed_data_dir <- "~/processed_data/"
+
+# Find variable features
+srt_merge <- FindVariableFeatures(srt_merge, selection.method = "vst", nfeatures = 2000)
+
+# Scale data - R crashes if you try to scale with all features. So only scale variable features and genes_to_scale for later annotation.
+srt_merge <- ScaleData(srt_merge, features = c(VariableFeatures(srt_merge), genes_to_scale)) 
+```
+
+# Add other key metadata
+```{r}
+# basic sample info
+patient <- srt_merge@meta.data %>%
+  pull(orig.ident) %>%
+  word(start = 1, end = 1, sep = fixed("_"))
+
+timepoint <- srt_merge@meta.data %>%
+  pull(orig.ident) %>%
+  word(start = 2, end = 2, sep = fixed("_"))
+
+sample_name <- srt_merge@meta.data %>%
+  pull(orig.ident) %>%
+  word(start = 1, end = 2, sep = fixed("_"))
+
+# response status
+responders <- c("P4", "P7", "P13", "P16")
+nonresponders <- c("P1", "P14")
+
+response_status <- srt_merge@meta.data %>%
+  mutate(response_status = case_when(
+    patient %in% responders ~ "responder",
+    patient %in% nonresponders ~ "nonresponder"
+  )) %>%
+  pull(response_status)
+response_status %>% table()
+
+# add columns to metadata
+srt_merge <- AddMetaData(srt_merge, metadata = patient, col.name = "patient")
+srt_merge <- AddMetaData(srt_merge, metadata = timepoint, col.name = "timepoint")
+srt_merge <- AddMetaData(srt_merge, metadata = sample_name, col.name = "sample_name")
+srt_merge <- AddMetaData(srt_merge, metadata = response_status, col.name = "response_status")
+
+# check columns
+srt_merge$patient %>% table()
+srt_merge$timepoint %>% table()
+srt_merge$sample_name %>% table()
+srt_merge$response_status %>% table()
+```
+
+```{r}
+# check metadata
+meta <- srt_merge@meta.data
+```
+
+
+```{r}
+# save seurat obj for use in next script
+saveRDS(srt_merge, file = paste0("/path/to/tumors_normalized_merged_scaled_srt_revision.rds"))
+```
+

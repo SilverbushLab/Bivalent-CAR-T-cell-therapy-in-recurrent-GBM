@@ -1,0 +1,77 @@
+---
+title: "1_data_import"
+output: html_document
+date: "2025-12-31"
+---
+
+```{r}
+library(dplyr)
+library(readr)
+library(tibble)
+library(readxl)
+library(purrr)
+```
+
+# import sample metadata
+```{r}
+meta <- read_xlsx("/path/to/resources/metadata.xlsx") 
+block_ids <- meta$Block
+
+block_lookup <- data.frame(Block = block_ids, sample_name = paste0(meta$sample_name))
+```
+
+
+# import counts
+```{r}
+base_path <- "~/path/to/star_out"
+counts_list <- list()
+for(block in block_ids){
+  path <- file.path(base_path, block)
+  path <- paste0(path, "/", block, "_featureCounts.dedup.txt")
+  
+  print(paste0("importing counts from: ", path))
+  if(file.exists(path)){
+    print("File exists")
+    counts_file <- read_tsv(path, comment = "#", show_col_types = FALSE) %>%
+      dplyr::select(1, 7) # keep geneid and counts only
+    
+    sample_name <- dplyr::filter(block_lookup, Block == block) %>% pull(sample_name) # match block id to sample name
+    colnames(counts_file)[ncol(counts_file)] <- sample_name # rename counts column
+    
+    counts_list[[sample_name]] <- counts_file
+  }
+   else(
+     print("File does not exist")
+   )
+}
+```
+
+
+
+```{r}
+# combine counts to one df
+counts_df <- reduce(
+  counts_list,
+  full_join,
+  by = "Geneid"
+)
+
+# get lengths
+first_block_path <- "path/to/star_out/18172_B-2_R1_Mid/18172_B-2_R1_Mid_featureCounts.dedup.txt"
+lengths <- read_tsv(first_block_path, comment = "#", show_col_types = FALSE) %>%
+  dplyr::select(1, 6)
+```
+
+
+```{r}
+# verify CAR is in counts df
+counts_df$Geneid %>% tail()
+stopifnot("CAR" %in% counts_df$Geneid) 
+
+# export
+colnames(counts_df)[1] <- "gene_id"
+#write_tsv(counts_df, "/path/to/raw_counts_gene_id.tsv")
+#write_tsv(lengths, "~/path/to/gene_id_lengths.tsv")
+```
+
+

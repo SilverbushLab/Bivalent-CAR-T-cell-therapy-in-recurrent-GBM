@@ -1,0 +1,182 @@
+---
+title: "Fig_S4D_inferCNV.rmd"
+output: html_document
+date: "2026-02-17"
+---
+
+
+```{r}
+library(Seurat)
+library(dplyr)
+library(ggplot2)
+library(readr)
+library(infercnv)
+```
+
+
+# Define functions
+This outputs annotations files for cell ranger cell ids and seurat clusters and returns a gene expression matrix
+```{r}
+# Define function to process each Seurat object with user-defined clusters
+process_seurat_annotations <- function(seurat_obj, sample_name,
+                                       output_dir = "~/resources/") {
+  
+  # Ensure output directory exists
+  if (!dir.exists(output_dir)) {
+    dir.create(output_dir, recursive = TRUE)
+  }
+  
+  # Extract gene expression matrix
+  GEX_matrix <- as.matrix(GetAssayData(seurat_obj, assay = "RNA", slot = "counts"))
+  
+  # Create annotations for Cell Ranger and Seurat clusters
+  annotations_seurat <- as_tibble(FetchData(seurat_obj, vars = "seurat_clusters"), rownames = "cellID")
+  annotations_inferCNV <- as_tibble(FetchData(seurat_obj, vars = "infercnv_annotation"), rownames = "cellID")
+
+  # Save annotation files without column names
+  write_tsv(annotations_seurat, paste0(output_dir, "annotations_seurat_inferCNV_figure_", sample_name, ".tsv"), col_names = FALSE)
+  write_tsv(annotations_inferCNV, paste0(output_dir, "annotations_sample_vs_control_inferCNV_figure_", sample_name, ".tsv"), col_names = FALSE)
+
+  # Print completion message
+  print(paste("Gene expression and annotation files saved for:", sample_name))
+  
+  if(all(colnames(GEX_matrix) %in% annotations_seurat$cellID)){
+    print("all cells in matrix are in the annotation data")
+  }
+  # Return processed data as a list (optional)
+  return(GEX_matrix)
+}
+
+```
+
+```{r}
+run_inferCNV <- function(gene_expression_matrix, annotation_file, gene_order_file, output_dir = "~/results/inferCNV/", ref_groups) {
+  
+  # Create InferCNV object
+  print("create infercnv object")
+  inferCNVObj <- CreateInfercnvObject(
+    raw_counts_matrix = gene_expression_matrix,
+    gene_order_file = gene_order_file,
+    annotations_file = annotation_file,
+    delim = '\t',
+    ref_group_names = ref_groups
+  )
+  
+  # Run InferCNV
+  print("run inferCNV")
+  inferCNV_res <- infercnv::run(
+    inferCNVObj, 
+    cutoff = 1, 
+    out_dir = output_dir,
+    cluster_by_groups = TRUE,
+    denoise = TRUE,
+    HMM = FALSE,  # Set to TRUE if using Hidden Markov Model for CNV calling
+    useRaster = FALSE,
+    png_res = 900,
+    #output_format = "pdf"
+    output_format = "png",
+    num_threads = 12
+    )
+  
+  # Print completion message
+  print(paste("InferCNV completed and results saved in:", output_dir))
+  
+  # Return the InferCNV result object
+  return(inferCNV_res)
+}
+
+```
+
+# subset seurat obj
+InferCNV cannot handle all ~ 100000 cells in the dataset. so we will subset the same proportion of cells for each cluster
+```{r}
+set.seed(1234)
+```
+
+```{r}
+srt_merge <- readRDS("~/processed_data/tumors_normalized_scaled_dimreduction_annotated_refined_miller_with_malig_states_srt_revision.rds")
+```
+
+
+```{r}
+meta <- srt_merge@meta.data
+meta$cell <- rownames(meta)
+
+target_n <- 15000
+sample_proportion <- target_n/nrow(meta)
+
+sampled_cells <- meta %>% # take metadata
+  group_by(seurat_clusters) %>%   # group by samples
+  slice_sample(prop = sample_proportion) %>% # take a random proportion of each cluster
+  pull(cell)
+
+srt_merge_sub <- subset(srt_merge, cells = sampled_cells)
+srt_merge_sub
+```
+
+```{r}
+# create a new metadata column that labels cells as either sample name or Nonmalignant
+srt_merge_sub@meta.data <- srt_merge_sub@meta.data %>% 
+  mutate(Malignant = case_when(cell_type_manual == "Malignant" ~ "Malignant",
+                               TRUE ~ "Nonmalignant")) 
+
+srt_merge_sub@meta.data$Malignant %>% table()
+srt_merge_sub$cell_type_manual %>% table()
+# divide nonmalignant into "glia", "lymphoid", "myeloid", and "other
+meta <- srt_merge_sub@meta.data
+
+infercnv_annotation <- meta %>%
+  mutate(infercnv_annotation = case_when(
+    Malignant == "Nonmalignant" & cell_type_manual == "Glial cell" ~ "Glial cell",
+    Malignant == "Nonmalignant" & cell_type_manual == "Lymphoid" ~ "Lymphoid",
+    Malignant == "Nonmalignant" & cell_type_manual == "Myeloid" ~ "Myeloid",
+    Malignant == "Malignant" ~ sample_name,
+    TRUE ~ "Other"
+    )) %>%
+  dplyr::pull(infercnv_annotation)
+
+# check that the vector looks right
+infercnv_annotation %>% table()
+
+# add to metadata
+srt_merge_sub <- AddMetaData(srt_merge_sub, infercnv_annotation, col.name = "infercnv_annotation")
+
+srt_merge_sub$infercnv_annotation %>% table()
+srt_merge_sub$seurat_clusters %>% table()
+dim(srt_merge_sub)
+```
+
+# create annotation files and GEX matrix for each sample
+```{r}
+out_dir <- "/your/path/to/resources/annotations_sample_vs_control_tumor_cell_annoation.tsv"
+
+# Process annotations
+GEX_matrix <- process_seurat_annotations(
+  seurat_obj = srt_merge_sub,
+  sample_name = "tumor_cell_annoation", # this is different from the sample name input into run infercnv. This changes the suffix of the annotation files
+  output_dir = out_dir)
+```
+
+# run InferCNV with fixed malignant cells
+cluster by sample
+```{r}
+# set up resources
+annotations_file <- "/your/path/to/resources/annotations_sample_vs_control_tumor_cell_annoation.tsv" # this file is produced by process_seurat_annotations
+out_dir_base <- "~/your/path/inferCNV/"
+gof <- "~/your/path/resources/hg38_gencode_v27.txt"
+
+sample_name <- "tumor_cell_inferCNV_res"
+
+# important diagnostic! Check that all annotations cells are in the GEX matrix!
+annotations <- read_tsv(annotations_file, col_names = FALSE)
+all(colnames(GEX_matrix) %in% annotations$X1)
+ref_groups <- c("Lymphoid", "Myeloid", "Glial cell", "Other")
+annotations$X2 %>% table()
+
+res <- run_inferCNV(gene_expression_matrix = GEX_matrix,
+             annotation_file = annotations_file,
+             gene_order_file = gof,
+             output_dir = paste0(out_dir_base, sample_name),
+             ref_groups = ref_groups)
+```
+

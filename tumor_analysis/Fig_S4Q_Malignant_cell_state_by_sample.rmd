@@ -1,0 +1,321 @@
+---
+title: "Fig_S4Q_Malignant_cell_state_by_sample"
+output: html_document
+date: "2026-02-17"
+---
+
+Note: This script re-calculates cell state scores and identity from gene expression. Cell state calls are also already present in the seurat object provided on GEO
+
+```{r}
+library(Seurat)
+library(dplyr)
+library(stringr)
+library(ggplot2)
+library(readr)
+library(ggnewscale) # Add this to the dockerfile
+```
+
+# define functions
+```{r}
+# Create a function to create cell state plotting values
+calculateCellStatePosition <- function(srt){
+  signature_names <- c('ac_sig', 'mes1_sig', 'mes2_sig', 'npc1_sig', 'npc2_sig', 'opc_sig')
+
+  metadata <- FetchData(srt, vars = signature_names) #%>%
+    #dplyr::mutate(across(everything(), ~ as.numeric(as.character(.))))
+  
+  metadata$mes_max_sig <- pmax(metadata$mes1_sig, metadata$mes2_sig, na.rm = TRUE)
+  metadata$npc_max_sig <- pmax(metadata$npc1_sig, metadata$npc2_sig, na.rm = TRUE)
+  print(head(metadata))
+  print("calculating D: ")
+  metadata$D <- NA
+  for (i in seq_len(nrow(metadata))) {
+    metadata$D[i] <- max(metadata$opc_sig[i], metadata$npc_max_sig[i]) -
+                     max(metadata$ac_sig[i], metadata$mes_max_sig[i])
+  }
+  print("Done calculating D:")
+  print(head(metadata))
+
+  d_g <- dplyr::filter(metadata, D > 0)
+  d_l <- dplyr::filter(metadata, D < 0)
+
+  # Stem-like (OPC/NPC)
+  if (nrow(d_g) > 0) {
+    d_g$diff <- d_g$opc_sig - d_g$npc_max_sig 
+    d_g$abs_diff <- abs(d_g$diff)
+    d_g$log <- log2(d_g$abs_diff + 1)
+    d_g$log[d_g$diff < 0] <- -d_g$log[d_g$diff < 0]
+
+    d_g <- d_g %>% dplyr::mutate(state = case_when(
+      diff >= 0 ~ "OPC",
+      diff < 0 ~ "NPC",
+      TRUE ~ NA_character_
+    ))
+  }
+
+  # Differentiated (AC/MES)
+  if (nrow(d_l) > 0) {
+    d_l$diff <- d_l$ac_sig - d_l$mes_max_sig
+    d_l$abs_diff <- abs(d_l$diff)
+    d_l$log <- log2(d_l$abs_diff + 1)
+    d_l$log[d_l$diff < 0] <- -d_l$log[d_l$diff < 0]
+
+    d_l <- d_l %>% dplyr::mutate(state = case_when(
+      diff >= 0 ~ "AC",
+      diff < 0 ~ "MES",
+      TRUE ~ NA_character_
+    ))
+  }
+
+  # Combine safely
+  if (nrow(d_g) > 0 && nrow(d_l) > 0) {
+    plotting_data <- rbind(d_g, d_l)
+  } else if (nrow(d_g) > 0) {
+    plotting_data <- d_g
+  } else if (nrow(d_l) > 0) {
+    plotting_data <- d_l
+  } else {
+    warning("No cells passed the D filter (neither D > 0 nor D < 0). Returning NULL.")
+    return(NULL)
+  }
+  
+  # we already have the cell state coords in plotting data. so we can drop the sigs from plotting_data before the merge with srt metadata
+  plotting_data <- plotting_data %>%
+    dplyr::select(-all_of(signature_names))
+  
+  # check rownames of plotting_data
+  #print(rownames(plotting_data)[1:10])
+  
+  # add a cell_id column to metadata and to srt obj. it will be used to combine plotting data with the seurat object
+  plotting_data$cell_id <- rownames(plotting_data)
+  srt@meta.data$cell_id <- colnames(srt)
+  
+  # check: cells in srt obj are the same as in 
+  print(paste0("are cells srt obj also in plotting data: ", all(plotting_data$cell_id %in% colnames(srt)) ) )
+  
+  srt@meta.data <- left_join(srt@meta.data, y = plotting_data, by = "cell_id")
+  
+  # repair srt colnames
+  rownames(srt@meta.data) <- srt@meta.data$cell_id
+  plotting_df <- srt@meta.data
+  
+  return(list("plotting_df" = plotting_df, "annotated_srt" = srt))
+}
+
+```
+
+
+```{r}
+# Create function to plot cell state values
+
+#####
+# This function is not used in this script but can be used if desired to plot cell state scores as in neftel et al. 2019
+####
+
+plotCellState <- function(df, title){
+  print("states in plotting function")
+  print(table(df$state))
+  plot <- ggplot(df, aes(x = log, y = D))+
+    scale_x_continuous(limits = c(-3,3))+
+    scale_y_continuous(limits = c(-3,3))+
+    geom_point(  aes(col=npc_max_sig) , data = subset(df, state=="NPC") , size = 0.5, alpha = 1.0)+
+    scale_color_gradient2("npc_max_sig", low = "cadetblue1", mid = "cadetblue3" ,high = "navy")+
+    new_scale("color")+
+    geom_point(  aes(col=opc_sig), data = subset(df, state=="OPC") , size = 0.5, alpha = 1.0)+
+    scale_color_gradient2("opc_sig", low = "darkseagreen1", mid = "darkseagreen3" ,  high = "darkolivegreen4")+
+    new_scale("color")+
+    geom_point(  aes(col=ac_sig), data = subset(df, state=="AC") , size = 0.5, alpha = 1.0)+
+    scale_color_gradient2("ac_sig", low = "darkgoldenrod1",  mid= "darkgoldenrod2", high = "darkgoldenrod4")+
+    new_scale("color")+
+    geom_point(aes(col=mes_max_sig), data = subset(df, state=="MES") , size = 0.5, alpha = 1.0)+
+    scale_color_gradient2("mes_max_sig", low = "lavenderblush1", mid = "coral2" , high = "darkred")+
+    new_scale("color")+
+    coord_cartesian(xlim = c(-1.7,1.7), ylim = c(-1.7,1.7))+
+    labs(title = title) +
+    ylab("Relative meta-module score\n[log2(|SC1-SC2|)+1]")+
+    xlab("Relative meta-module score\n[log2(|SC1-SC2|)+1]")+
+    geom_hline(yintercept = 0, linetype = "dashed", linewidth = 0.2) +
+    geom_vline(xintercept = 0, linetype = "dashed", linewidth = 0.2) +
+    theme(plot.title = element_text(hjust = 0.5, color="black", size = 16, face = "bold"),
+        axis.title.y = element_text(color="black", size=15, face = "bold", margin = margin(t = 0, r = 10, b = 0, l = 0) ),
+        axis.title.x = element_text(color="black", size=15, face = "bold", margin = margin(t = 0, r = 10, b = 0, l = 0) ),
+        axis.text.x = element_text(size = 13),
+        axis.text.y = element_text(size = 13),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(),
+        axis.line = element_line(colour = "black"),
+        legend.position = "right" ,
+        #legend.title = element_blank() ,
+        legend.margin = margin(0,0,0,0),
+        legend.box.margin = margin(5,5,5,5),
+        legend.text = element_text( face = "bold", size = 8),
+        legend.spacing.x = unit(0.2, "cm"),
+        legend.key.size = unit(0.3, "cm"),       # Shrinks legend boxes
+        legend.title = element_text(size = 9)
+        
+      
+  )
+return(plot)
+}
+```
+
+
+```{r}
+# Create meta-function to calculate and plot cell state values
+#NOTE: IF AC_SIG COLUMN HAS ALL NAs OR IS NON-NUMERIC IT IS LIKELY BECAUSE THE COLNAME RENAMING FUNCTION IS RENAMING THE WRONG COLUMNS!!
+neftel_meta_function <- function(srt, sample_name){
+  #calculate cell state signature score using AddModuleScore
+  signatures <- list(ac_sig, mes1_sig, mes2_sig, npc1_sig, npc2_sig, opc_sig)
+  signature_names <- c('ac_sig', 'mes1_sig', 'mes2_sig', 'npc1_sig', 'npc2_sig', 'opc_sig')
+  
+  print("Score Cell States")
+  srt <- AddModuleScore(srt, features = signatures, ctrl = 100, nbin = 24, name = signature_names)
+  print("Successfully scored cell states")
+
+  # AddModuleScore adds unwanted suffix numbers. This removes these.
+  sig_col_names <- c("ac_sig1", "mes1_sig2", "mes2_sig3", "npc1_sig4", "npc2_sig5", "opc_sig6") #incorrect colnames
+  colnames(srt@meta.data)[match(sig_col_names, colnames(srt@meta.data))] <- signature_names
+  #colnames(srt@meta.data)[11:16] <- signature_names #
+  
+  # make plotting Data
+  print("calculate plotting data")
+  cell_state_res <- calculateCellStatePosition(srt)
+  plotting.df <- cell_state_res$plotting_df
+  srt_res <- cell_state_res$annotated_srt
+  
+  ####
+  # Optionally plot malignant cell state scores below per cell
+  ####
+  
+  #print("states plotting df, meta function")
+  #print(table(plotting.df$state))
+  #print("states srt obj, meta function")
+  #print(table(srt_res$state))
+
+  # plot
+  #print("plotting")
+  #p1 <- plotCellState(df = plotting.df, title = paste0(sample_name, " - Cell States"))
+  #print(p1)
+  
+  #return(plotting.df)
+  return(srt_res)
+}
+```
+
+
+# import and format seurat object
+```{r}
+#srt_merge <- readRDS("/path/to/seurat/object")
+srt_merge <- readRDS("~/processed_data/tumors_normalized_scaled_dimreduction_annotated_refined_miller_srt_revision.rds")
+srt_malig <- subset(srt_merge, subset = cell_type_final_no_program == "Malignant")
+srt_malig$sample_name <- gsub("_", " ", srt_malig$sample_name)
+```
+
+# Import signatures
+```{r}
+ac_sig <- read_lines('~/external_resources/ac_genes.txt')
+mes1_sig <- read_lines('~/external_resources/mes1_genes.txt')
+mes2_sig <- read_lines('~/external_resources/mes2_genes.txt')
+npc1_sig <- read_lines('~/external_resources/npc1_genes.txt')
+npc2_sig <- read_lines('~/external_resources/npc2_genes.txt')
+opc_sig <- read_lines('~/external_resources/opc_genes.txt')
+```
+
+```{r fig.width= 8, fig.height=6}
+sample_order <- c("P1 Pre", "P1 Post", "P4 Pre", "P4 Post", "P7 Pre", "P7 Post", "P13 Pre", "P13 Post", "P14 Post", "P16 Post")
+scored_obj_list <- list()
+
+for (sample in sample_order){
+  print(paste0("sample: ", sample))
+  srt <- srt_malig
+  srt <- subset(srt, subset = sample_name == sample)
+  print(paste0("number of malignant cells: ", length(srt$orig.ident)))
+  scored_obj_list[[sample]] <- neftel_meta_function(srt = srt, sample_name = sample)
+  rm(srt)
+}
+```
+
+```{r}
+# combine patient-wise seurat objects to one.
+srt_malig_states <- Reduce(
+  function(x, y) merge(x, y),
+  scored_obj_list
+)
+dim(srt_malig)
+dim(srt_malig_states)
+```
+
+
+# obtain cell counts for each type
+```{r}
+# get cell counts for types and make new metadata column
+# Count number of cells per group
+cell_counts <- table(srt_malig_states$state)
+
+# Create a named vector of labels with counts
+label_with_counts <- paste0(names(cell_counts), " (", cell_counts, ")")
+names(label_with_counts) <- names(cell_counts)
+
+# Add a new metadata column with those labels
+counted_cells <- label_with_counts[match(srt_malig_states$state, names(label_with_counts))]
+names(counted_cells) <- colnames(srt_malig_states)
+srt_malig_states <- AddMetaData(srt_malig_states, metadata = counted_cells, col.name = "state_with_counts")
+
+# check cell types with counts
+srt_malig_states$state_with_counts %>% table(useNA = "ifany")
+```
+
+
+```{r}
+# colors
+cellstate_colors <- c(
+  "AC (10098)"  = "#F3C623",
+  "MES (4608)" = "#C2352A",
+  "NPC (6116)" = "#2A5CAA",
+  "OPC (7305)" = "#4C8C3B"
+    )
+```
+
+```{r}
+#sample_order <- c("P1 Pre", "P1 Post", "P4 Pre", "P4 Post", "P7 Pre", "P7 Post")
+
+sample_order <- c("P1 Pre", "P1 Post", "P4 Pre", "P4 Post", "P7 Pre", "P7 Post", "P13 Pre", "P13 Post", "P14 Post", "P16 Post")
+srt_malig_states$sample_name <- factor(srt_malig_states$sample_name, levels = sample_order)
+# Extract metadata
+meta <- srt_malig_states@meta.data 
+```
+
+
+# plot cell state abundance by sample:
+```{r}
+
+# Create a summary table with proportions
+composition_df <- meta %>%
+  group_by(sample_name, state_with_counts) %>% # make a separate dataframe for each unique combination of values of orig.ident and cell_type_manual and sends to...
+  summarise(n = n()) %>% # this counts up the number of entries (cells) for each combination and outputs them in a new column "n"
+  ungroup() %>%
+  group_by(sample_name) %>% # for each value of sample_name
+  mutate(proportion = n/sum(n)) # for each value of cell type, give (count of that cell type)/(count of all cell types)
+
+composition_df$state_with_counts <- factor(composition_df$state_with_counts, levels = names(cellstate_colors))
+composition_df$sample_name <- factor(composition_df$sample_name, levels = sample_order)
+
+# Plot
+p <- ggplot(composition_df, aes(x = sample_name, y = proportion, fill = state_with_counts)) +
+  geom_bar(stat = "identity") +
+  scale_fill_manual(values = cellstate_colors) +
+  ylab("Proportion of Cells") +
+  xlab("Sample") +
+  labs(fill = "Cell State") +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "right",
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank()
+  ) 
+
+#ggsave(plot = p, filename = "/your/path/cell_state_stack_bar_by_patient_plot_full_cohort.pdf", width = 8, height = 5)
+p
+```

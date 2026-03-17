@@ -1,32 +1,39 @@
-CSF and infusion product analysis:
+Welcome to the Silverbush Lab Github page containing code for data exploration and figure reproduction from our manuscript "The critical role of the host immune environment in GBM CAR T cell therapy".
 
-Fastq files can be obtained from the GEO repository with the accession code GSE296419. This repository contains raw fastq files, Cellbender-processed count matrices, and cell type annotations. 
+Data availability
 
-A Docker image is available which generates an environment suitable for running all code for generating CSF and infusion-product related figures. This can be accessed at the Silverbush Lab DockerHub account (https://hub.docker.com/repository/docker/silverbushdana/jupyter_seurat_infercnv_v2/general) or use: 
+	Raw data are protected to preserve patient privacy. Processed data can be downloaded from GEO with accession code GSE296419. Processed data are available in the form of counts  (processed for ambient RNA correction and empty droplet removal with Cellbender 0.3.0, .h5 file), contigs containing TCR clonotype data (csv.gz), per-cell annotation files, and fully annotated analysis-ready Seurat objects (.csv.gz). Counts and TCR clonotype data are available individually for each sample. Seurat objects are available as Supplementary .rds files and are labelled according to sample type. Note that the Infusion Product sample for Patient 14 is in Seurat object (.rds). Bulk RNA sequencing data are also in supplementary files: as raw counts (GSE296419_FFPE_bulkRNA_raw_counts.tsv.gz) and TPM (GSE296419_FFPE_bulkRNA_tpm_gene_symbol_id_dedup.tsv.gz). 
 
-docker pull silverbushdana/jupyter_seurat_infercnv_v2
+	GEO link: https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSM9543458
 
-There are separate preprocessing (pp) scripts for CSF and infusion product samples. Raw data (fastq) and processed data (Cellbender-processed .tsv files) can be obtained from Gene Expression Omnibus at accession code GSE296419 (https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE296419). These data are private until publication of the associated manuscript, but can be accessed using the token provided alongside manuscript submission.
-
-Preprocessing files for CSF and infusion product samples should be run in the following order: Load, Scrublet, Clustering, TCR integration. These files output a Seurat object (.rds file) that can be used as input to figure-generating scripts.
-
-
-
-
-Tumor analysis: 
+	Seurat objects:
+	CSF Seurat object: GSE296419_CSF_seurat_final.rds
+	Tumor Seurat object: GSE296419_srt_tumor_final.rds
+	IP Seurat object (P1-P8): GSE296419_srt_IP_disc.rds
+	IP Seurat object(P14): GSE296419_srt_P14_IP.rds
 
 
-Code for tumor cell analysis is run separately from the CSF and Infusion Product analysis.
-
-Use the included dockerfile in "Dockerfile_tumor_analysis" create an environment containing required packages. This includes both R and python packages. Alternatively, the corresponding image can be obtained from the Silverbush Lab DockerHub page (https://hub.docker.com/repository/docker/silverbushdana/e20_with_rstudio_jupyter_updated/general) using:
-
-docker pull silverbushdana/e20_with_rstudio_jupyter_updated
-
-Fastq files can be obtained from the GEO repository with the accession code GSE296419. This repository contains raw fastq files, Cellbender-processed count matrices, and cell type annotations. Either fastq files or cellbender-preprocessed files can be used as input into preprocessing script 1. Cellbender-preprocessed files may be preferred, as Cellbender is highly computationally intensive. 
-
-Raw or preprocessed files will need to be moved into an directory for import into R or python.
-
-Inside the container, use the 4 tumor_preprocessing files to import and preprocess fastq files and output a useable Seurat object as a .rds file. This .rds file is used as input to the figure-generating .rmd files. These files are numbered according to the correct running order.
+Code availability:
+	Code is provided to reproduce figures from our manuscript. Code is separated by relevant tissue type into CSF, Infusion product, and tumor folders. Preprocessing code is also available to generate Seurat objects from counts. Please find the associated preprocessing code for each tissue type in their respective folders. 
 
 
-Many scripts pull from files in the resources folder. There should be no need to edit files in resources.
+Docker:
+Docker images are available which generate an environment suitable for running all code for generating figures. There are two separate Docker images: One for the CSF/Infusion Product and one for tumor samples. 
+
+	CSF and Infusion Product:
+	Can be accessed at the Silverbush Lab DockerHub account (https://hub.docker.com/repository/docker/silverbushdana/jupyter_seurat_infercnv_v2/general) or use: 
+
+	docker pull silverbushdana/jupyter_seurat_infercnv_v2
+
+	Tumor:
+	Can be accessed at the Silverbush Lab DockerHub account (https://hub.docker.com/repository/docker/silverbushdana/jupyter_seurat_infercnv_v2/general) or use: 
+
+	docker pull silverbushdana/jupyter_seurat_infercnv_v2
+
+	This docker image can also be generated from scratch using the dockerfile contained in the "tumor_analysis" folder
+
+
+Resources:
+	Many scripts pull from files in the resources folder. There should be no need to edit files in resources. When loading resources, ensure your path is correct.
+
+

@@ -1,0 +1,89 @@
+---
+title: "plot_cpm_CAR_Targets"
+output: html_document
+date: "2026-01-01"
+---
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(readr)
+library(tibble)
+library(readxl)
+library(purrr)
+library(ggplot2)
+library(cowplot)
+```
+
+# load data
+```{r}
+set.seed(1234)
+cpm_df <- read_tsv("/path/to/resources/cpm_gene_symbol_dedup.tsv") # this is included in "resources". It can also be remade in processing script "3_normalization".
+meta <- read_xlsx("/path/to/resources/metadata.xlsx")
+```
+
+
+# make a plotting df
+```{r}
+plot_df <- (cpm_df) %>%
+  column_to_rownames("gene_symbol") %>%
+  as.data.frame() %>%
+  t() %>%
+  as_tibble(rownames = "sample_name") %>%
+  right_join(meta, by = "sample_name") %>%
+  dplyr::select(sample_name, Patient, Timepoint, Response_status, DoseClass, CAR, EGFR, IL13RA2)
+
+plot_df$sample_name <- factor(plot_df$sample_name, 
+                              levels = c("P01_Pre_1",
+                                         "P01_Pre_2",
+                                         "P01_Post_1",
+                                         "P04_Pre_1",
+                                         "P04_Post_1",
+                                         "P07_Pre_1",
+                                         "P07_Post_1",
+                                         "P13_Pre_1",
+                                         "P13_Post_1",
+                                         "P14_Pre_1",
+                                         "P14_Post_1",
+                                         "P16_Pre_1",
+                                         "P16_Post_1"))
+
+plot_df$Timepoint <- factor(plot_df$Timepoint, levels = c("Pre", "Post"))
+```
+
+# plot CAR targets for patients for which we have RNAscope
+```{r}
+# wrangle data
+patients_to_plot <-c("P04", "P07", "P13")
+meta_sub <- meta %>%
+  dplyr::filter(Patient %in% patients_to_plot)
+
+plot_df <- cpm_df %>%
+  column_to_rownames(var = "gene_symbol") %>%
+  as.data.frame() %>%
+  t() %>%
+  as_tibble(rownames = "sample_name") %>%
+  dplyr::filter(sample_name %in% meta_sub$sample_name) %>%
+  right_join(meta_sub, by = "sample_name") %>%
+  dplyr::select(sample_name, Patient, Timepoint, Response_status, DoseClass, CAR, EGFR, IL13RA2)
+
+plot_df$Timepoint <- factor(plot_df$Timepoint, levels = c("Pre", "Post"))  
+```
+
+
+```{r fig.width=4, fig.height=4}
+sample_colors = c("P07" = "#0f9ed5", "P04" = "#196b24", "P13" = "purple1")
+
+p1 <- ggplot(plot_df, aes(x = Timepoint, y = EGFR, color = Patient, group = Patient)) +
+  geom_point(size = 4) +
+  geom_line(linewidth = 1) +
+  scale_color_manual(values = sample_colors) +
+  labs(y = "EGFR (CPM)") +
+  theme_bw()
+
+#ggsave("/your/path/CAR_and_CAR_target_expression/CAR_target_by_timepoint_dot_and_line.pdf", width = 6, height = 3, plot = p_comb)
+p1
+```
+
+
+

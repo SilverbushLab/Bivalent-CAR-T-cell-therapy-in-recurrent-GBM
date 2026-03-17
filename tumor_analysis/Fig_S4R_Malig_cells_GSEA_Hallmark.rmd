@@ -1,0 +1,215 @@
+---
+title: "Fig_S4R_Malig_cells_GSEA_Hallmark"
+output: html_document
+date: "2026-02-17"
+---
+
+
+```{r}
+library(devtools)
+install_github("alserglab/fgsea") # dependency for clusterprofiler
+remotes::install_version("yulab.utils", version = "0.2.3") # dependency for ggtree
+devtools::install_github("GuangchuangYu/ggtree") # dependency for enrichplot, which is a dependency for clusterProfiler
+
+install.packages("gprofiler2")
+BiocManager::install("clusterProfiler")
+install.packages('msigdbr')
+```
+
+
+```{r}
+library(clusterProfiler)
+
+library(Seurat)
+library(tidyr)
+library(dplyr)
+library(tibble)
+library(readr)
+library(ggplot2)
+library(ggnewscale)
+library(gghalves)
+library(ggpubr) # needs cmake
+library(scales)
+library(patchwork)
+library(stringr)
+library(forcats)
+library(ggrepel)
+
+library(presto)
+library(msigdbr)
+```
+
+# load functions
+```{r}
+plot_gsea_dotplot <- function(
+  gsea_df,
+  top_n = 20,
+  title = NULL,
+  enriched_genesets = c("enriched", "deenriched")
+) {
+
+  enriched_genesets <- match.arg(enriched_genesets)
+
+  plot_df <- gsea_df %>%
+    filter(!is.na(NES), !is.na(p.adjust))
+
+  if (enriched_genesets == "enriched") {
+    message("Displaying enriched gene sets (NES > 0)")
+
+    plot_df <- plot_df %>%
+      filter(NES > 0) %>%
+      arrange(desc(NES)) %>%
+      slice_head(n = top_n)
+
+    x_label <- "Normalized Enrichment Score (NES)"
+
+  } else {
+    message("Displaying de-enriched gene sets (NES < 0), flipped for interpretation")
+
+    plot_df <- plot_df %>%
+      filter(NES < 0) %>%
+      arrange(NES) %>%              # most negative first
+      slice_head(n = top_n) %>%
+      mutate(NES = -NES)             # flip sign
+
+    x_label <- "Normalized Enrichment Score (flipped; enriched in comparison group)"
+  }
+
+  plot_df <- plot_df %>%
+    mutate(
+      Description = factor(Description, levels = rev(Description)),
+      log10_p = -log10(p.adjust)
+    )
+
+  ggplot(plot_df, aes(
+    x = NES,
+    y = Description,
+    size = log10_p,
+    color = NES
+  )) +
+    geom_point() +
+    scale_color_viridis_c() +
+    scale_size_continuous(name = "-log10(adj. p)") +
+    labs(
+      x = x_label,
+      y = NULL,
+      title = title
+    ) +
+    theme_bw() +
+    theme(
+      axis.text.y = element_text(size = 10),
+      axis.text.x = element_text(size = 10),
+      plot.title = element_text(hjust = 0.5)
+    )
+}
+
+```
+
+
+# load data
+```{r}
+#srt <- readRDS("~/processed_data/tumors_normalized_scaled_dimreduction_annotated_refined_miller_srt_revision.rds")
+srt <- readRDS("/path/to/tumor/seurat/object")
+
+srt_malig <- subset(srt, subset = cell_type_final_no_program == "Malignant")
+Idents(srt_malig) <- "timepoint"
+```
+
+# run findmarkers
+```{r}
+# run findmarkers with caution. each takes > 15 min.
+
+deg_timepoint_LR <- FindMarkers(srt_malig, ident.1 = "Post", ident.2 = "Pre",
+                                  test.use = "LR",
+                                  min.pct = 0.2,
+                                  logfc.threshold = 0.25,
+                                  latent.vars = c("nCount_RNA")) %>%
+  rownames_to_column(var = "gene")
+
+
+deg_timepoint_LR2 <- deg_timepoint_LR %>%
+  dplyr::mutate(signif = case_when(
+    avg_log2FC > 1 & p_val_adj < 0.05 ~ "signif_up",
+    avg_log2FC < -1 & p_val_adj < 0.05 ~ "signif_dn",
+    TRUE ~ "ns"
+  ))
+
+```
+
+
+```{r}
+# Save DEG list. Can be imported below to save time on repeated runs.
+write_tsv(deg_timepoint_LR2, "/path/to/results/malig_findMarkers_logisticregression_PostvsPre_res.tsv")
+```
+
+# <------- Restart here
+FindMarkers takes a long time to run. Once DEGs have been computed, restart here to import .tsv file containing DEGs
+
+# Volcano plot
+```{r}
+highlight_map <- c(
+  # A. Lineage Remodeling
+  "TWIST2" = "Mesenchymal shift",
+  "TWIST1" = "Mesenchymal shift",
+  "CD44"   = "Mesenchymal shift",
+  "NF1"  = "Mesenchymal shift",
+
+  # B. Physical Barrier
+  "POSTN" = "Physical barrier",
+  "PCOLCE"  = "Physical barrier",
+  "COL6A2" = "Physical barrier",
+
+  # C. Metabolic Armor
+  "HIF1A"   = "Metabolic Armor",
+  "VEGFA"  = "Metabolic Armor",
+  "SLC16A1"  = "Metabolic Armor"
+)
+
+highlight_colors <- c(
+  "Mesenchymal shift"   = "#7B3294",  # deep purple (cell state)
+  "Physical barrier"     = "#008837",  # fibrotic green
+  "Metabolic Armor" = "#E08214"  # hypoxia / metabolism amber
+)
+```
+
+
+```{r}
+# read deg data back in
+deg_timepoint_LR2 <- read_tsv("/path/to/results/malig_findMarkers_logisticregression_PostvsPre_res.tsv")
+```
+
+# GSEA analysis
+```{r}
+# Pull C2 genesets from msigdb
+hs_gsea_c2 <- msigdbr(species = "Homo sapiens", # change depending on species your data came from
+                      category = "C2") %>% 
+  dplyr::select(gs_name, gene_symbol) # GSEA TERM2GENE param requireds df with geneset name and each gene symbol
+
+hs_gsea_h <- msigdbr(species = "Homo sapiens", # change depending on species your data came from
+                      category = "H") %>% 
+  dplyr::select(gs_name, gene_symbol) # GSEA TERM2GENE param requireds df with geneset name and each gene symbol
+```
+
+```{r}
+set.seed(1234) # GSEA has some random elements. set seed.
+
+# GSEA expects a gene-named vector of decreasingly ranked LogFC values
+ranked_genes <- as.numeric(deg_timepoint_LR2$avg_log2FC)
+names(ranked_genes) <- as.character(deg_timepoint_LR2$gene)
+ranked_genes <- sort(ranked_genes, decreasing = TRUE)
+
+# run GSEA using the 'GSEA' function from clusterProfiler
+GSEA_res_H <- GSEA(ranked_genes, TERM2GENE = hs_gsea_h, verbose = TRUE) #could replace C2CP with hs_gsea_c2 object you retrieved from msigdb above
+GSEA_res_H_df <- as_tibble(GSEA_res_H@result)
+
+#write_tsv(GSEA_res_H_df, "/path/to/results/malig_GSEA_Post_vs_Pre_H_res.tsv")
+```
+
+
+```{r}
+p1 <- plot_gsea_dotplot(GSEA_res_H_df, top_n = 5, enriched_genesets = "enriched",
+                        title = "Malignant cells - Hallmark Genesets - Up in Post")
+#ggsave("/your/path/malig_GSEA_Post_Up_H_res.pdf", width = 12, height =  5, plot = p3)
+p1
+```
+

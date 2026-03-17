@@ -1,0 +1,464 @@
+---
+title: "tumor_analysis_inferCNV_P16_Post"
+output: html_document
+date: "2025-12-12"
+---
+
+```{r}
+library(Seurat)
+library(dplyr)
+library(ggplot2)
+library(readr)
+library(infercnv)
+```
+
+
+# Define functions
+This outputs annotations files for cell ranger cell ids and seurat clusters and returns a gene expression matrix
+```{r}
+# Define function to process each Seurat object with user-defined clusters
+process_seurat_annotations <- function(seurat_obj, sample_name,
+                                       output_dir = "~/resources/") {
+  
+  # Ensure output directory exists
+  if (!dir.exists(output_dir)) {
+    dir.create(output_dir, recursive = TRUE)
+  }
+  
+  # Extract gene expression matrix
+  GEX_matrix <- as.matrix(GetAssayData(seurat_obj, assay = "RNA", slot = "counts"))
+  
+  # Create annotations for Cell Ranger and Seurat clusters
+  annotations_seurat <- as_tibble(FetchData(seurat_obj, vars = "seurat_clusters"), rownames = "cellID")
+  annotations_inferCNV <- as_tibble(FetchData(seurat_obj, vars = "infercnv_annotation"), rownames = "cellID")
+
+  # Save annotation files without column names
+  write_tsv(annotations_seurat, paste0(output_dir, "annotations_seurat_inferCNV_figure_", sample_name, ".tsv"), col_names = FALSE)
+  write_tsv(annotations_inferCNV, paste0(output_dir, "annotations_sample_vs_control_inferCNV_figure_", sample_name, ".tsv"), col_names = FALSE)
+
+  # Print completion message
+  print(paste("Gene expression and annotation files saved for:", sample_name))
+  
+  if(all(colnames(GEX_matrix) %in% annotations_seurat$cellID)){
+    print("all cells in matrix are in the annotation data")
+  }
+  # Return processed data as a list (optional)
+  return(GEX_matrix)
+}
+
+```
+
+
+
+```{r}
+run_inferCNV <- function(gene_expression_matrix, annotation_file, gene_order_file, output_dir = "~/results/inferCNV/", ref_groups) {
+  
+  # Create InferCNV object
+  print("create infercnv object")
+  inferCNVObj <- CreateInfercnvObject(
+    raw_counts_matrix = gene_expression_matrix,
+    gene_order_file = gene_order_file,
+    annotations_file = annotation_file,
+    delim = '\t',
+    ref_group_names = ref_groups
+  )
+  
+  # Run InferCNV
+  print("run inferCNV")
+  inferCNV_res <- infercnv::run(
+    inferCNVObj, 
+    cutoff = 1, 
+    out_dir = output_dir,
+    cluster_by_groups = TRUE,
+    denoise = TRUE,
+    HMM = FALSE,  # Set to TRUE if using Hidden Markov Model for CNV calling
+    useRaster = FALSE,
+    png_res = 900,
+    #output_format = "pdf"
+    output_format = "png",
+    num_threads = 12
+    )
+  
+  # Print completion message
+  print(paste("InferCNV completed and results saved in:", output_dir))
+  
+  # Return the InferCNV result object
+  return(inferCNV_res)
+}
+
+```
+
+```{r}
+set.seed(1234)
+```
+
+
+# import P16 Post from script 4
+```{r}
+srt_P16_Post <- read_rds("~/processed_data/tumors_normalized_merged_scaled_annotated_coarse_srt_revision_P16_Post.rds")
+```
+
+```{r}
+# check cell type distribution
+DimPlot(srt_P16_Post, group.by = "cell_type_manual")
+DimPlot(srt_P16_Post, group.by = "seurat_clusters")
+srt_P16_Post$cell_type_manual %>% table()
+```
+
+
+```{r}
+# Read malignant cluster calls
+malig_file <- "/resources/malignant_cell_calls_tumor_P16_Post_revision.txt"
+malig_clusters <- read_lines(malig_file)
+
+# Get number of clusters
+nClusters <- length(table(FetchData(srt_P16_Post, vars = "seurat_clusters")))
+  
+# Determine non-malignant clusters
+nonmalig_clusters <- as.character(setdiff(0:(nClusters - 1), malig_clusters))
+
+malig_clusters
+nonmalig_clusters
+
+```
+
+# create infercnv annotations in metadata to separate by malignant vs. nonmalignant
+This creates the "inferCNV annotation" column which is needed for "process_seurat_annotations"
+```{r}
+# create a new metadata column that labels cells as either sample name or Nonmalignant
+srt_P16_Post@meta.data <- srt_P16_Post@meta.data %>% 
+  mutate(malignant = case_when(seurat_clusters %in% malig_clusters ~ "malignant",
+                               TRUE ~ "nonmalignant")) 
+srt_P16_Post@meta.data$malignant %>% table()
+
+# divide nonmalignant into "glia", "lymphoid", "myeloid", and "other
+srt_P16_Post$cell_type_manual %>% table()
+srt_P16_Post$sample_name %>% table()
+meta <- srt_P16_Post@meta.data
+
+infercnv_annotation <- meta %>%
+  mutate(infercnv_annotation = case_when(
+    malignant == "malignant" ~ sample_name,
+    TRUE ~ "Other"
+    )) %>%
+  dplyr::pull(infercnv_annotation)
+
+# check that the vector looks right
+infercnv_annotation %>% table()
+
+# add to metadata - this is key for creating the "by_sample" annotation column
+srt_P16_Post <- AddMetaData(srt_P16_Post, infercnv_annotation, col.name = "infercnv_annotation")
+
+srt_P16_Post$infercnv_annotation %>% table()
+srt_P16_Post$cell_type_manual %>% table()
+srt_P16_Post$seurat_clusters %>% table()
+dim(srt_P16_Post)
+```
+
+
+# create annotation files and GEX matrix for each sample
+```{r}
+out_dir <- "~/resources/"
+
+# Process annotations
+GEX_matrix <- process_seurat_annotations(
+  seurat_obj = srt_P16_Post,
+  sample_name = "tumors_P16_Post_revision", # this is different from the sample name input into run infercnv. This changes the suffix of the annotation files
+  output_dir = out_dir)
+```
+
+```{r}
+#By Seurat cluster
+
+# set up resources 
+annotations_file <- "~/resources/annotations_seurat_inferCNV_figure_tumors_P16_Post_revision.tsv"
+out_dir_base <- "~/results/inferCNV/"
+gof <- "~/external_resources/hg38_gencode_v27.txt"
+
+sample_name <- "tumors_by_cluster_figure_revision_P16_Post"
+
+
+# important diagnostic! Check that all annotations cells are in the GEX matrix!
+annotations <- read_tsv(annotations_file, col_names = FALSE)
+all(colnames(GEX_matrix) %in% annotations$X1)
+
+ref_groups <- nonmalig_clusters
+annotations$X2 %>% table()
+
+res <- run_inferCNV(gene_expression_matrix = GEX_matrix,
+             annotation_file = annotations_file,
+             gene_order_file = gof,
+             output_dir = paste0(out_dir_base, sample_name),
+             ref_groups = ref_groups)
+```
+
+# Find the barcodes of bona fide P16 post malignant cells from inferCNV result object
+```{}
+P16 post has only about 11 malignant cells (visualized by infeCNV output) in cluster 11. These cells do not cluster separately from nonmalignant cells. It is therefore necessary to ID these few cells by barcode and manually update their cell type to malignant in the main seurat object containing all tumor cells.
+```
+
+
+```{r}
+# get hierarchical clustering data
+hc <- res@tumor_subclusters$hc
+
+# get barcodes in the same order as in the dendrogram.
+cell_order <- hc$'11'$labels[hc$'11'$order]
+
+cell_order
+
+df <- data.frame(
+  cell_id = cell_order,
+  dendrogram_position = seq_along(cell_order)
+)
+
+# get index of the firs and last malignant cell, which all sub-clustered together in inferCNV
+# last malignant cell is 2 from the end. First malignant cell is 10 before that. 11 total.
+#first_malig <- dim(df)[1] - 2 - 10
+#last_malig <- dim(df)[1] - 2
+
+# pull malignant cells
+#malignant_cells <- df$cell_id[first_malig:last_malig]
+malignant_cells <- df$cell_id[3:13]
+malignant_cells
+```
+
+# update P16 seurat object
+```{r}
+# Identify cells in cluster 11
+cells_cluster11 <- WhichCells(
+  object = srt_P16_Post,
+  idents = 11
+)
+
+# check this is the right cluster
+cells_cluster11_test <- srt_P16_Post@meta.data %>%
+  filter(seurat_clusters == "11") %>%
+  rownames()
+
+all(cells_cluster11_test == cells_cluster11)
+
+# Assign all cluster 11 cells as ambiguous.
+srt_P16_Post@meta.data[cells_cluster11, "cell_type_manual"] <- "Ambiguous"
+srt_P16_Post@meta.data[cells_cluster11, "malignant"] <- "nonmalignant"
+
+srt_P16_Post$malignant %>% table()
+srt_P16_Post$cell_type_manual %>% table()
+
+srt_P16_Post@meta.data %>% filter(seurat_clusters == "11")
+
+# Assign called malignant cells as "malignant" = "malignant and "cell_type_manual" = "malignant
+srt_P16_Post@meta.data[malignant_cells, "cell_type_manual"] <- "Malignant"
+srt_P16_Post@meta.data[malignant_cells, "malignant"] <- "malignant"
+
+srt_P16_Post$malignant %>% table()
+```
+
+# Test bona fide malignant cells with inferCNV.
+Set up first
+```{r}
+
+# divide nonmalignant into "glia", "lymphoid", "myeloid", and "other
+srt_P16_Post$cell_type_manual %>% table()
+srt_P16_Post$sample_name %>% table()
+
+meta <- srt_P16_Post@meta.data
+
+infercnv_annotation <- meta %>%
+  mutate(infercnv_annotation = case_when(
+    malignant == "malignant" ~ sample_name,
+    malignant == "nonmalignant" & cell_type_manual == "Ambiguous" ~ "Ambiguous",
+    TRUE ~ "Other"
+    )) %>%
+  dplyr::pull(infercnv_annotation)
+
+# check that the vector looks right
+infercnv_annotation %>% table()
+
+# add to metadata - this is key for creating the "by_sample" annotation column
+srt_P16_Post <- AddMetaData(srt_P16_Post, infercnv_annotation, col.name = "infercnv_annotation")
+
+srt_P16_Post$infercnv_annotation %>% table()
+srt_P16_Post$cell_type_manual %>% table()
+srt_P16_Post$seurat_clusters %>% table()
+dim(srt_P16_Post)
+```
+
+
+# create annotation files and GEX matrix for each sample
+```{r}
+out_dir <- "~/resources/"
+
+# Process annotations
+GEX_matrix <- process_seurat_annotations(
+  seurat_obj = srt_P16_Post,
+  sample_name = "tumors_P16_Post_revision_refined", # this is different from the sample name input into run infercnv. This changes the suffix of the annotation files
+  output_dir = out_dir)
+```
+
+
+# run InferCNV with updated malignant cells.
+
+```{r}
+# set up resources
+annotations_file <- "~/resources/annotations_sample_vs_control_inferCNV_figure_tumors_P16_Post_revision_refined.tsv"
+out_dir_base <- "~/results/inferCNV/"
+gof <- "~/external_resources/hg38_gencode_v27.txt"
+
+
+sample_name <- "tumors_merge_by_sample_figure_revision_P16_Post_Refined"
+
+# important diagnostic! Check that all annotations cells are in the GEX matrix!
+annotations <- read_tsv(annotations_file, col_names = FALSE)
+all(colnames(GEX_matrix) %in% annotations$X1)
+ref_groups <- c("Ambiguous", "Other")
+
+annotations$X2 %>% table()
+
+run_inferCNV(gene_expression_matrix = GEX_matrix,
+             annotation_file = annotations_file,
+             gene_order_file = gof,
+             output_dir = paste0(out_dir_base, sample_name),
+             ref_groups = ref_groups)
+```
+
+
+```{r}
+srt_merge <- readRDS("~/processed_data/tumors_normalized_merged_scaled_annotated_coarse_srt_revision.rds")
+srt_merge$sample_name %>% table()
+srt_merge$cell_type_manual %>% table()
+```
+
+```{r}
+P16_Post_cells_called_Malig <- srt_merge@meta.data %>%
+  dplyr::filter(sample_name == "P16_Post") %>%
+  dplyr::filter(cell_type_manual == "Malignant") %>%
+  rownames()
+
+length(P16_Post_cells_called_Malig)
+
+# overwrite incorrect malignant cells to ambiguous.
+srt_merge@meta.data[P16_Post_cells_called_Malig, "cell_type_manual"] <- "Ambiguous"
+
+# overwrite bona fide malignant cells accordingly
+srt_merge@meta.data[malignant_cells, "cell_type_manual"] <- "Malignant"
+```
+
+```{r}
+saveRDS(srt_merge, "~/processed_data/tumors_normalized_merged_scaled_annotated_coarse_malig_fixed_srt_revision.rds")
+```
+
+```{r}
+srt_merge <- readRDS("~/processed_data/tumors_normalized_merged_scaled_annotated_coarse_malig_fixed_srt_revision.rds")
+```
+
+
+```{r}
+# check malignant count. P16 post should have 11 malig.
+malig_count <- srt_merge@meta.data %>%
+  subset(cell_type_manual == "Malignant") %>%
+  group_by(sample_name) %>%
+  summarize(malig_count = n())
+```
+
+
+# subset seurat obj
+
+```{r}
+set.seed(1234)
+```
+
+```{r}
+# InferCNV cannot handle all ~ 100000 cells in the dataset. so we will subset the same proportion of cells for each cluster
+meta <- srt_merge@meta.data
+meta$cell <- rownames(meta)
+
+target_n <- 15000
+sample_proportion <- target_n/nrow(meta)
+
+sampled_cells <- meta %>% # take metadata
+  group_by(seurat_clusters) %>%   # group by samples
+  slice_sample(prop = sample_proportion) %>% # take a random proportion of each cluster
+  pull(cell)
+
+srt_merge_sub <- subset(srt_merge, cells = sampled_cells)
+srt_merge_sub
+```
+
+
+```{r}
+# clear big seurat obj from memory
+rm(srt_merge)
+gc()
+```
+
+
+```{r}
+# create a new metadata column that labels cells as either sample name or Nonmalignant
+srt_merge_sub@meta.data <- srt_merge_sub@meta.data %>% 
+  mutate(Malignant = case_when(cell_type_manual == "Malignant" ~ "Malignant",
+                               TRUE ~ "Nonmalignant")) 
+
+srt_merge_sub@meta.data$Malignant %>% table()
+srt_merge_sub$cell_type_manual %>% table()
+# divide nonmalignant into "glia", "lymphoid", "myeloid", and "other
+meta <- srt_merge_sub@meta.data
+
+infercnv_annotation <- meta %>%
+  mutate(infercnv_annotation = case_when(
+    Malignant == "Nonmalignant" & cell_type_manual == "Glial cell" ~ "Glial cell",
+    Malignant == "Nonmalignant" & cell_type_manual == "Lymphoid" ~ "Lymphoid",
+    Malignant == "Nonmalignant" & cell_type_manual == "Myeloid" ~ "Myeloid",
+    Malignant == "Malignant" ~ sample_name,
+    TRUE ~ "Other"
+    )) %>%
+  dplyr::pull(infercnv_annotation)
+
+# check that the vector looks right
+infercnv_annotation %>% table()
+
+# add to metadata
+srt_merge_sub <- AddMetaData(srt_merge_sub, infercnv_annotation, col.name = "infercnv_annotation")
+
+srt_merge_sub$infercnv_annotation %>% table()
+srt_merge_sub$seurat_clusters %>% table()
+dim(srt_merge_sub)
+```
+
+# create annotation files and GEX matrix for each sample
+```{r}
+#out_dir <- "~/Dropbox (PennNeurosurgery)/SilverbushLab/Projects/E20_tumor_analysis/resources/"
+out_dir <- "~/resources/"
+
+# Process annotations
+GEX_matrix <- process_seurat_annotations(
+  seurat_obj = srt_merge_sub,
+  sample_name = "tumors_revision_malig_fixed", # this is different from the sample name input into run infercnv. This changes the suffix of the annotation files
+  output_dir = out_dir)
+```
+
+# run InferCNV with fixed malignant cells
+cluster by sample
+```{r}
+# set up resources
+annotations_file <- "~/resources/annotations_sample_vs_control_inferCNV_figure_tumors_revision_malig_fixed.tsv"
+out_dir_base <- "~/results/inferCNV/"
+gof <- "~/external_resources/hg38_gencode_v27.txt"
+
+sample_name <- "tumors_merge_by_sample_figure_revision_malig_fixed"
+
+# important diagnostic! Check that all annotations cells are in the GEX matrix!
+annotations <- read_tsv(annotations_file, col_names = FALSE)
+all(colnames(GEX_matrix) %in% annotations$X1)
+ref_groups <- c("Lymphoid", "Myeloid", "Glial cell", "Other")
+annotations$X2 %>% table()
+
+res <- run_inferCNV(gene_expression_matrix = GEX_matrix,
+             annotation_file = annotations_file,
+             gene_order_file = gof,
+             output_dir = paste0(out_dir_base, sample_name),
+             ref_groups = ref_groups)
+```
+
+
+

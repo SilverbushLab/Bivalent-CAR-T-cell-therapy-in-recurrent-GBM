@@ -1,0 +1,167 @@
+---
+title: "tumor_preprocessing_8_manual_annotations_miller_myeloid.rmd"
+output: html_document
+date: "2025-12-18"
+---
+
+
+```{r}
+library(Seurat)
+library(readr)
+library(tibble)
+library(dplyr)
+library(viridis)
+library(presto) # used to greatly improve FindAllMarkers efficiency
+```
+
+# define funcitons
+```{r}
+# Define a function to run UMAP
+create_UMAP <- function(seurat_obj, sample_name, num_pcs, res = 0.25) {
+
+  # Find neighbors and clusters
+  seurat_obj <- FindNeighbors(seurat_obj, dims = 1:num_pcs)
+  seurat_obj <- FindClusters(seurat_obj, resolution = res)
+  
+  # Print cluster assignments for verification
+  print(paste("Clusters for", sample_name, ":"))
+  print(head(Idents(seurat_obj)))
+  
+  # Run UMAP
+  seurat_obj <- RunUMAP(seurat_obj, dims = 1:num_pcs)
+
+  # Save UMAP plots with different groupings
+  #p1 <- DimPlot(seurat_obj, reduction = "umap", group.by = "seurat_clusters", label = TRUE) + ggtitle(sample_name)
+  #print(p1)
+
+  # Print message indicating completion
+  print(paste("UMAP and clustering completed for:", sample_name))
+
+  # Return the updated Seurat object
+  return(seurat_obj)
+}
+```
+
+# Import tumor cells with coarse annotations
+```{r}
+srt_merge <- readRDS("~/processed_data/tumors_normalized_scaled_dimreduction_annotated_refined_srt_revision.rds")
+srt_merge$cell_type_manual %>% table()
+```
+
+```{r}
+# load miller lab myeloid annotations based on their existing programs
+miller_df <- read.csv("/resources/edward_penn-silverbush-cart-collaboration-2025_ege-miller-silverbush-2025-slvb_myeloid_bc_usages_final_annotated.csv") 
+colnames(miller_df)[1] <- "cell_id"
+```
+
+
+The miller lab annotations have 492 cells that are not cell types but are instead just activities. All cells that have program-related annotations have no cell type annotation. The programs add up to 492 which is the same as the number of cells without types. For these, it is necessary to fall back to my manual annotations.
+
+Also: Use "cell_identity_annotation" not "cell_type_identity_annotation" as 
+
+```{r}
+miller_df$cell_identity_annotation %>% table(useNA = "ifany")
+table(miller_df$cell_identity_annotation == "", useNA = "ifany")
+miller_df$final_annotation %>% table()
+
+```
+
+
+# update seurat object with miller lab myeloid cell annotations
+```{r}
+# extract cell barcodes in both miller lab annotations and main seurat object (myeloid cells)
+matching_cells <- colnames(srt_merge)[colnames(srt_merge) %in% miller_df$cell_id]
+
+# get index of common (myeloid) cells in miller annotations
+match_index <- match(matching_cells, miller_df$cell_id)
+
+# initialize a final annotation column
+srt_merge$cell_type_final <- srt_merge$cell_type_manual_refined
+srt_merge$cell_type_final_no_program <- srt_merge$cell_type_manual_refined
+
+# overwrite myeloid cell annotations with miller lab annotations
+srt_merge$cell_type_final[matching_cells] <- miller_df$final_annotation[match_index]
+
+# only overwrite annotations for cells with valid cell type annotations
+
+# pull Miller annotations aligned to matching_cells, correctly ordered
+miller_no_program <- miller_df$cell_identity_annotation[match_index]
+# identify valid (non-empty, non-NA) entries
+valid <- !is.na(miller_no_program) & miller_no_program != ""
+# overwrite ONLY those
+srt_merge$cell_type_final_no_program[matching_cells[valid]] <- miller_no_program[valid]
+```
+
+```{r}
+srt_myeloid <- subset(srt_merge, subset = cell_type_manual == "Myeloid")
+
+# check if all miller lab annotation cells are in srt_myeloid and vice versa
+all(colnames(srt_myeloid) %in% miller_df$cell_id) & all(miller_df$cell_id %in% colnames(srt_myeloid)) # Returns TRUE
+
+```
+
+```{r}
+srt_myeloid$cell_type_final_no_program %>% table()
+```
+
+
+# re-cluster and check umap
+```{r}
+set.seed(1234)
+
+# find variable features
+srt_myeloid <- FindVariableFeatures(srt_myeloid, selection.method = "vst", nfeatures = 2000)
+
+# Scale data 
+markers_df <- read_csv("~/resources/Myeloid_markers_revision.csv")
+
+srt_myeloid <- ScaleData(srt_myeloid, features = VariableFeatures(srt_myeloid))
+
+srt_myeloid <- RunPCA(srt_myeloid, features = VariableFeatures(object = srt_myeloid))
+
+plot <- ElbowPlot(srt_myeloid)
+plot
+```
+
+From elbow plot, use 10 PCs
+```{r}
+sample_name <- "myeloid_refined_revision"
+srt_myeloid <- create_UMAP(srt_myeloid, sample_name = sample_name, 
+        num_pcs = 10, res = 0.35)
+
+srt_myeloid@meta.data %>% head()
+```
+
+```{r}
+# and plot over UMAP to be sure:
+p1 <- DimPlot(srt_myeloid, group.by = "cell_type_manual_refined")
+p2 <- DimPlot(srt_myeloid, group.by = "cell_type_final")
+p3 <- DimPlot(srt_myeloid, group.by = "cell_type_final_no_program")
+
+ggsave("~/results/dimreduction/umap/umap_tumor_myeloid_annotation_miller_full_assignments_revision.png", width = 8, height = 5, plot = p2)
+ggsave("~/results/dimreduction/umap/umap_tumor_myeloid_annotation_miller_type_only_assignments_revision.png", width = 8, height = 5, plot = p3)
+
+p1
+p2
+p3
+```
+
+```{r fig.width=10, fig.height=5}
+DimPlot(srt_merge, group.by = "cell_type_manual_refined")
+```
+
+
+```{r}
+colnames(srt_merge@meta.data)
+```
+
+```{r fig.width= 10, fig.height= 5}
+DimPlot(srt_merge, group.by = "cell_type_final_no_program")
+```
+
+
+```{r}
+saveRDS(srt_merge, file = "~/processed_data/tumors_normalized_scaled_dimreduction_annotated_refined_miller_srt_revision.rds")
+```
+
+

@@ -1,0 +1,124 @@
+---
+title: "Fig_S4E_tumor_cell_type_composition"
+output: html_document
+date: "2026-02-17"
+---
+
+
+
+```{r}
+library(Seurat)
+library(tidyr)
+library(ggplot2)
+library(ggpubr)
+library(dplyr)
+library(harmony)
+library(purrr)
+library(cowplot)
+library(rstatix)
+library(ggbeeswarm)
+library(ggbreak)
+```
+
+# Set up and adjust metadata
+```{r}
+#srt_merge <- readRDS("/path/to/seurat/object/")
+srt_merge <- readRDS("~/processed_data/tumors_normalized_scaled_dimreduction_annotated_refined_miller_srt_revision.rds")
+```
+
+
+```{r}
+# check metadata
+srt_merge$sample_name <- gsub("_", " ", srt_merge$sample_name) # remove underscore from sample name
+```
+
+
+```{r}
+# create custom cell colors
+named_colors_tumor <- c(
+  "Malignant (28127)"              = "#B22222",
+  "CD4 T cell (5938)"              = "#A6CEE3",
+  "CD8 T cell (8966)"              = "#B294C7",
+  "Cycling lymphoid cell (181)"    = "#C7B699",
+  "Regulatory T cell (678)"        = "#52AF43",
+  "NK cell (1279)"                 = "#E6CB75",
+  "Macrophage (9945)"              = "#4992C2",
+  "Monocyte (4254)"                = "#F68181",
+  "Neutrophil (2602)"              = "orange",
+  "cDC (4318)"                     = "#70449D",
+  "Cycling myeloid cell (42)"      = "#E6AB02",
+  "B cell (113)"                   = "lightgray",
+  "Plasma cell (69)"               = "#AADB84",
+  "Microglia (10432)"              = "#4DAF4A",
+  "Glial cell (20682)"             = "#984EA3",
+  "Neuron (798)"                   = "#377EB8",
+  "Endothelial (385)"              = "#FF69B4"
+)
+
+```
+
+
+```{r}
+# get cell counts for types and make new metadata column
+# Count number of cells per group
+cell_counts <- table(srt_merge$cell_type_final_no_program)
+
+# Create a named vector of labels with counts
+label_with_counts <- paste0(names(cell_counts), " (", cell_counts, ")")
+names(label_with_counts) <- names(cell_counts)
+label_with_counts
+
+# Add a new metadata column with those labels
+counted_cells <- label_with_counts[match(srt_merge$cell_type_final_no_program, names(label_with_counts))]
+names(counted_cells) <- colnames(srt_merge)
+srt_merge <- AddMetaData(srt_merge, metadata = counted_cells, col.name = "cell_type_with_counts")
+
+# check cell types with counts
+srt_merge$cell_type_with_counts %>% table()
+```
+
+```{r}
+# factor for order
+srt_merge$cell_type_with_counts <- factor(srt_merge$cell_type_with_counts,
+                                             levels = names(named_colors_tumor))
+
+srt_merge$cell_type_with_counts %>% table()
+```
+
+# Plot sample-wise cell type composition
+```{r}
+# Extract metadata
+meta <- srt_merge@meta.data
+
+sample_order <- c("P1 Pre", "P1 Post","P4 Pre", "P4 Post", "P7 Pre", "P7 Post", "P13 Pre", "P13 Post", "P14 Post", "P16 Post")
+meta$sample_name <- factor(meta$sample_name, levels = sample_order)
+
+# Create a summary table with proportions -- for samples
+composition_by_sample_df <- meta %>%
+  group_by(sample_name, cell_type_with_counts) %>% # make a separate dataframe for each unique combination of values of orig.ident and cell_type_manual and sends to...
+  summarise(n = n()) %>% # this counts up the number of entries (cells) for each combination and outputs them in a new column "n"
+  ungroup() %>%
+  group_by(sample_name) %>% # for each value of sample_name
+  mutate(proportion = n/sum(n)) # for each value of cell type, give (count of that cell type)/(count of all cell types)
+
+sample_order <- c("P1 Pre", "P1 Post", "P4 Pre", "P4 Post", "P7 Pre", "P7 Post", "P13 Pre", "P13 Post", "P14 Post", "P16 Post")
+
+composition_by_sample_df$cell_type_with_counts <- factor(composition_by_sample_df$cell_type_with_counts, levels = names(named_colors_tumor))
+composition_by_sample_df$sample_name <- factor(composition_by_sample_df$sample_name, levels = sample_order)
+
+# Plot
+p1 <- ggplot(composition_by_sample_df, aes(x = sample_name, y = proportion, fill = cell_type_with_counts)) +
+  geom_bar(stat = "identity") +
+  scale_fill_manual(values = named_colors_tumor) +
+  labs(fill = "Cell Type", x = "Sample", y = "Proportion of Cells") +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "right",
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank()
+  ) 
+
+#ggsave(plot = p1, filename = "~/your/path/cell_revisions_final/tumor_fig_tumor_cell_type_proportion_by_sample_stacked_barplot.pdf", width = 5, height = 5)
+p1
+```

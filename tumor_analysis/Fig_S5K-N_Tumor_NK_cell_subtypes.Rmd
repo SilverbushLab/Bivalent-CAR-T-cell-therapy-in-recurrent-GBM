@@ -1,0 +1,168 @@
+---
+title: "Fig4_NKcells"
+output: html_document
+date: "2025-04-22"
+---
+
+```{r}
+library(Seurat)
+library(tidyr)
+library(dplyr)
+library(tibble)
+library(ggplot2)
+library(ggnewscale)
+library(gghalves)
+library(ggpubr) # needs cmake
+library(scales)
+library(harmony)
+library(patchwork)
+library(stringr)
+library(forcats)
+```
+
+
+# Define functions
+```{r}
+# Define a function to run UMAP
+create_UMAP <- function(seurat_obj, num_pcs, res = 0.25, reduction = "pca") {
+
+  # Find neighbors and clusters
+  seurat_obj <- FindNeighbors(seurat_obj, dims = 1:num_pcs, reduction = reduction)
+  seurat_obj <- FindClusters(seurat_obj, resolution = res)
+  
+  # Print cluster assignments for verification
+  print(paste("Clusters:"))
+  print(head(Idents(seurat_obj)))
+  
+  # Run UMAP
+  seurat_obj <- RunUMAP(seurat_obj, dims = 1:num_pcs, reduction = reduction)
+
+  # Print message indicating completion
+  print(paste("UMAP and clustering completed and files saved for:", sample_name))
+
+  # Return the updated Seurat object
+  return(seurat_obj)
+}
+```
+
+# read in tumor sc data
+```{r}
+srt_merge <- readRDS("/path/to/seurat/object")
+#srt_merge <- readRDS("~/processed_data/tumors_normalized_scaled_dimreduction_annotated_refined_miller_with_malig_states_srt_revision.rds")
+```
+
+# Subcluster NK cells
+```{r}
+srt_merge_NK <- subset(srt_merge, subset = cell_type_manual_refined == "NK cell")
+dim(srt_merge_NK)
+srt_merge_NK$sample_name %>% table()
+```
+
+```{r}
+# find variable features
+srt_merge_NK <- FindVariableFeatures(srt_merge_NK, selection.method = "vst", nfeatures = 2000)
+  
+# Scale data 
+markers_df <- read_csv("~/resources/NK_markers_all_revision.csv")
+genes_to_scale <- markers_df$marker
+
+srt_merge_NK <- ScaleData(srt_merge_NK, features = c(VariableFeatures(srt_merge_NK), genes_to_scale)) 
+
+srt_merge_NK <- RunPCA(srt_merge_NK, features = VariableFeatures(object = srt_merge_NK))
+
+ElbowPlot(srt_merge_NK)
+```
+
+```{r}
+# Use these clusters for annotating CD56Dim;CD16+/ CD56Bright;CD16-
+set.seed(1234)
+srt_merge_NK <- create_UMAP(srt_merge_NK, 
+        num_pcs = 5, res = 0.35)
+
+srt_merge_NK@meta.data %>% head()
+srt_merge_NK@meta.data$cell_type_manual %>% table()
+```
+
+# add module scores for nk cell types - extended sigs
+```{r}
+CD56dim_CD16pos <- c("FCGR3A", "FGFBP2", "PRDM1", "CX3CR1", "CCL3", "CCL4, KIR3DL2", "KIR2DL3")
+CD56Bright_CD16neg <- c("NCAM1", "XCL1", "XCL2", "GZMK", "KLRC1", "SELL", "GATA3")
+
+features <- list("CD56dim_CD16pos" = CD56dim_CD16pos,
+                 "CD56Bright_CD16neg" = CD56Bright_CD16neg)
+
+srt_merge_NK <- AddModuleScore(srt_merge_NK, features = features)
+colnames(srt_merge_NK@meta.data)[colnames(srt_merge_NK@meta.data) %in% c("Cluster1", "Cluster2")] <- c("CD56dim_CD16pos", "CD56Bright_CD16neg")
+srt_merge_NK@meta.data
+```
+
+# Fig S5K: CD56DimCD16+/CD56BrightCD16- Signature score over umap
+```{r}
+cols = c("#3c78b5", "#fdfab8", "#be2448")
+p1 <- FeaturePlot(srt_merge_NK, features = "CD56dim_CD16pos", raster = FALSE) + 
+  scale_color_gradientn(colors = cols, name = "Mean scaled expression") +
+  ggtitle(label = "CD56-Dim/CD16-Pos Signature")
+
+
+p2 <- FeaturePlot(srt_merge_NK, features = "CD56Bright_CD16neg", raster = FALSE) + 
+  scale_color_gradientn(colors = cols, name = "Mean scaled expression") +
+  ggtitle(label = "CD56-Bright/CD16-Neg Signature")
+
+#ggsave(filename = "~/your/path/NK_full_cohort_FeaturePlotCD56dim_CD16pos_sig.pdf", plot = p1, width = 8, height = 5.5)
+#ggsave(filename = "~/your/path/NK_full_cohort_FeaturePlotCD56Bright_CD16neg_sig.pdf", plot = p2, width = 8, height = 5.5)
+
+p1
+p2
+```
+
+
+# Fig S5L: Plot NK cells over UMAP, labeled by timepoint
+```{r}
+# get cell counts for timepoint and make new metadata column
+
+# Count number of cells per group
+cell_counts <- table(srt_merge_NK$timepoint)
+
+# Create a named vector of labels with counts
+label_with_counts <- paste0(names(cell_counts), " (", cell_counts, ")")
+names(label_with_counts) <- names(cell_counts)
+
+# Add a new metadata column with those labels
+counted_cells <- label_with_counts[match(srt_merge_NK$timepoint, names(label_with_counts))]
+names(counted_cells) <- colnames(srt_merge_NK)
+
+srt_merge_NK <- AddMetaData(srt_merge_NK, metadata = counted_cells, col.name = "timepoint_with_counts")
+srt_merge_NK$timepoint_with_counts %>% table()
+```
+
+```{r}
+tp_cols <- c(
+  "Pre (623)" = "#A6BD8C", 
+  "Post (656)" = "firebrick4")
+
+srt_merge_NK$timepoint_with_counts <- factor(srt_merge_NK$timepoint_with_counts, 
+                                                levels = names(tp_cols))
+
+```
+
+```{r}
+p1 <- DimPlot(srt_merge_NK, group.by = "timepoint_with_counts", cols = tp_cols, raster = FALSE)
+#ggsave(filename = "~/results/NK_full_cohort_UMAP_NKcells_by_timepoint.pdf", plot = p1, width = 8, height = 5.5)
+p1
+```
+
+# Fig S5M: dotplot for expresssion of sigs by nk type
+```{r}
+greenpurple <- c("#036300", "white", "#68228b")
+
+#Dotplot for CD56-Bright/CD56-Dim
+features <- c("FCGR3A", "FGFBP2", "PRDM1", "CX3CR1", "CCL3", "KIR2DL3", "NCAM1", "XCL1", "XCL2", "GZMK", "KLRC1", "SELL", "GATA3")
+features <- factor(features, levels = features)
+
+plot <- DotPlot(srt_merge_NK, features = features, group.by = "NK_subtype") +
+  scale_color_gradientn(colors = greenpurple) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+#ggsave("/your/path/NK_full_cohort_DotPlot_CD56DCD16P_CD56BCD16N_green_purple.pdf", plot = plot, width = 8, height = 3.5)
+plot
+```
+

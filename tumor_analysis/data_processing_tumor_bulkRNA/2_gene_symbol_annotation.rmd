@@ -1,0 +1,130 @@
+---
+title: "2_gene_symbol_annotation"
+output: html_document
+date: "2026-01-01"
+---
+
+```{r}
+BiocManager::install("biomaRt")
+```
+
+```{r}
+library(dplyr)
+library(readr)
+library(tibble)
+library(readxl)
+library(purrr)
+library(biomaRt)
+```
+
+# load data
+```{r}
+counts_df <- read_tsv("/path/to/raw_counts_gene_id.tsv")
+stopifnot("CAR" %in% counts_df$gene_id)
+```
+
+# create gene - symbol table
+```{r}
+ensembl_ids <- counts_df$gene_id[grepl("^ENSG", counts_df$gene_id)]
+
+mart <- useMart("ensembl", dataset = "hsapiens_gene_ensembl")
+
+gene_map_human <- getBM(
+  attributes = c("ensembl_gene_id", "hgnc_symbol"),
+  filters = "ensembl_gene_id",
+  values = ensembl_ids,
+  mart = mart
+) %>%
+  rename(
+    gene_id = ensembl_gene_id,
+    gene_symbol = hgnc_symbol
+  )
+
+# add CAR to gene map 
+custom_genes <- counts_df$gene_id[!grepl("^ENSG", counts_df$gene_id)]
+
+gene_map_custom <- tibble(
+  gene_id = custom_genes,
+  gene_symbol = custom_genes
+)
+
+gene_map_custom <- bind_rows(gene_map_human, gene_map_custom)
+
+# check CAR in gene map
+gene_map_custom[gene_map_custom$gene_symbol == "CAR", "gene_id"]
+
+# check CAR targets in gene map
+gene_map_custom[gene_map_custom$gene_symbol == "EGFR", "gene_id"]
+gene_map_custom[gene_map_custom$gene_symbol == "IL13RA2", "gene_id"]
+```
+
+# add gene symbol to counts df
+```{r}
+# filter gene map and counts so that only shared ensembl ids are present
+counts_df <- counts_df %>% 
+  dplyr::filter(gene_id %in% gene_map_custom$gene_id)
+
+gene_ids_in_dataset <- counts_df$gene_id
+
+gene_map_custom <- gene_map_custom %>%
+  dplyr::filter(gene_id %in% gene_ids_in_dataset)
+
+# verify all gene ids are shared between gene map and dataset counts
+stopifnot(all(gene_map_custom$gene_id %in% counts_df$gene_id) & 
+            all(counts_df$gene_id %in% gene_map_custom$gene_id))
+
+# add gene symbol to counts
+counts_df <- counts_df %>%
+  left_join(gene_map_custom, by = "gene_id")
+
+# check again that CAR is present
+stopifnot("CAR" %in% counts_df$gene_symbol)
+
+# and look at CAR targets. Do they match the previous gene IDs?
+counts_df[counts_df$gene_symbol == "EGFR", "gene_id"] %>% as.character()
+counts_df[counts_df$gene_symbol == "IL13RA2", "gene_id"] %>% as.character()
+
+# rearrange counts
+counts_df <- counts_df %>%
+  dplyr::select(gene_symbol, colnames(counts_df)[1:ncol(counts_df)-1])
+
+# filter genes that have no gene symbol
+counts_df <- counts_df %>%
+  filter(!is.na(gene_symbol), gene_symbol != "")
+
+```
+
+
+# deduplicate gene symbols.
+Some ensembl IDs map to multiple genes - in this case just one
+Remove dupes by taking the ensembl id with the most counts across samples:
+
+```{r}
+# which gene(s) has multiple ensembl ids per symbol
+counts_df$gene_symbol[duplicated(counts_df$gene_symbol)]
+```
+
+```{r}
+# takes ~ 5-10 sec
+counts_dedup_df <- counts_df %>%
+  group_by(gene_symbol) %>%
+  slice_max(
+    rowSums(across(where(is.numeric))),
+    n = 1,
+    with_ties = FALSE
+  ) %>%
+  ungroup()
+
+```
+
+```{r}
+# check CAR
+counts_dedup_df %>% filter(gene_symbol == "CAR")
+```
+
+
+# export raw counts
+```{r}
+write_tsv(counts_dedup_df, "/path/to/raw_counts_gene_symbol_dedup.tsv")
+```
+

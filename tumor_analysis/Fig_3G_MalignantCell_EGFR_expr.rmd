@@ -1,0 +1,92 @@
+---
+title: "Fig_S3G_MalignantCell_EGFR_expr"
+output: html_document
+date: "2026-02-17"
+---
+
+
+```{r}
+library(Seurat)
+library(tidyr)
+library(ggplot2)
+library(ggpubr)
+library(dplyr)
+library(harmony)
+library(purrr)
+library(cowplot)
+library(rstatix)
+library(ggbeeswarm)
+library(ggbreak)
+```
+
+# Set up and adjust metadata
+```{r}
+srt_merge <- readRDS("~/processed_data/tumors_normalized_scaled_dimreduction_annotated_refined_miller_srt_revision.rds")
+srt_merge$sample_name <- gsub("_", " ", srt_merge$sample_name) # remove underscore from sample name
+```
+
+
+# 7) EGFR expression by sample
+```{r}
+srt_merge_malig <- subset(srt_merge, subset = cell_type_final_no_program == "Malignant")
+colnames(srt_merge_malig@meta.data)
+dim(srt_merge_malig)
+```
+
+```{r}
+# setup EGFR boxplots
+sample_order <- c("P14 Post", "P16 Post", "P1 Pre", "P1 Post", "P7 Pre", "P7 Post", "P13 Pre", "P13 Post", "P4 Pre", "P4 Post")
+# Get EGFR and IL13RA2 expression and metadata
+malig_df <- FetchData(srt_merge_malig, vars = c("EGFR", "IL13RA2", "sample_name", "timepoint"))
+malig_df <- malig_df %>%
+  dplyr::filter(sample_name %in% sample_order)
+comparisons <- list(
+  c("P1 Pre", "P1 Post"),
+  c("P4 Pre", "P4 Post"),
+  c("P7 Pre", "P7 Post"),
+  c("P13 Pre", "P13 Post")
+)
+unique(malig_df$sample_name)
+```
+
+```{r}
+patient_colors <- c(
+  "P1 Pre"    = "orange",  
+  "P1 Post"   = "#e97132", 
+  "P4 Pre"    = "lightgreen",  
+  "P4 Post"   = "#196b24",  
+  "P7 Pre"    = "#0f9ed5",  
+  "P7 Post"   = "#156082",
+  "P13 Pre"   = "purple",
+  "P13 Post"  = "#70449D",
+  "P14 Post"  = "firebrick3",
+  "P16 Post"  = "pink2"
+)
+```
+
+```{r}
+malig_df$sample_name <- factor(malig_df$sample_name, levels = sample_order)
+malig_df$sample_name %>% table()
+
+all(names(patient_colors) %in% malig_df$sample_name)
+```
+
+```{r}
+# violin plot + beeswarm
+plot <- ggplot(malig_df, aes(x = sample_name, y = EGFR, fill = sample_name)) +
+  geom_violin(trim = FALSE, scale = "width", color = NA, alpha = 0.8) +  # violin plot
+  geom_beeswarm(priority = "density", cex = 0.1, alpha = 0.2, color = "gray") +  # beeswarm overlay
+  scale_fill_manual(values = patient_colors) +
+  stat_summary(fun = mean, geom = "crossbar", width = 0.4, color = "black", flatten = 0) +  # mean point
+  stat_compare_means(comparisons = comparisons, method = "wilcox.test", label = "p.format") +
+  theme_minimal() +
+  labs(title = "Malignant cells: EGFR expression by sample", x = "Sample", y = "EGFR Expression") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        panel.grid = element_blank(),
+        legend.position = "none")
+
+#ggsave("~/figures/cell_revisions_final/tumor_figMaligCell_EGFR_expression_by_sample_wilcox_violin_beeswarm.pdf", plot = plot)
+plot
+```
+
+

@@ -1,0 +1,125 @@
+---
+title: "3_normalization_cpm"
+output: html_document
+date: "2026-01-01"
+---
+
+```{r}
+library(dplyr)
+library(readr)
+library(tibble)
+library(readxl)
+library(purrr)
+library(limma)
+library(edgeR)
+library(ggplot2)
+```
+
+# load data
+```{r}
+counts_df <- read_tsv("/path/to/raw_counts_gene_symbol_dedup.tsv") # get from GEO
+meta <- read_xlsx("/path/to/resources/bulk_RNAseq_metadata.xlsx")
+stopifnot("CAR" %in% counts_df$gene_symbol)
+```
+
+# convert to matrix
+```{r}
+count_mat <- counts_df %>%
+  dplyr::select(-gene_id) %>%
+  tibble::column_to_rownames("gene_symbol") %>%
+  as.matrix()
+
+storage.mode(count_mat) <- "integer"
+```
+
+# normalize
+```{r}
+dge <- DGEList(counts = count_mat)
+dge <- calcNormFactors(dge, method = "TMM")
+
+cpm <- cpm(dge, log = FALSE)
+```
+
+# export
+```{r}
+cpm_df <- cpm %>%
+  as_tibble(rownames = "gene_symbol")
+
+write_tsv(cpm_df, "~/processed_data/cpm_gene_symbol_dedup.tsv")
+```
+
+# calculate TPM
+
+# import data
+```{r}
+raw_counts <- read_tsv("~/processed_data/raw_counts_gene_symbol_dedup.tsv")
+lengths <- read_tsv("~/processed_data/gene_id_lengths.tsv")
+
+colnames(lengths)[1] <- "gene_id"
+
+lengths <- lengths %>% dplyr::filter(gene_id %in% raw_counts$gene_id)
+
+stopifnot(all(lengths$gene_id %in% raw_counts$gene_id))
+stopifnot(all(!is.na(lengths$Length)))
+```
+# calculate TPM
+```{r}
+# get lengths in kb
+lengths_kb <- lengths %>% 
+  mutate(Length = Length/1000)
+
+# add lengths (kb) to raw counts
+raw_counts <- left_join(raw_counts, lengths_kb, by = "gene_id")
+
+# collect gene_id gene_symbol and lengths
+gene_id <- raw_counts$gene_id # extract and save gene ids
+gene_symbol <- raw_counts$gene_symbol # extract and save gene symbol
+length_vector <- raw_counts$Length # get length in kb as vector
+
+names(gene_id) <- gene_symbol
+names(length_vector) <- gene_symbol
+
+# convert to counts only
+raw_counts <- raw_counts %>%
+  as.data.frame() %>%
+  column_to_rownames("gene_symbol") %>%
+  dplyr::select(-gene_id, -Length)
+
+# divide raw counts (filter to numeric columns) by lengths in kb
+rpk <- raw_counts / length_vector[rownames(raw_counts)]
+
+# Per-sample scaling factors
+scaling_factors <- colSums(rpk)
+
+tpm <- sweep(rpk, 2, scaling_factors, "/") * 1e6
+
+rm(gene_symbol) # clear this to avoid confusion in line below. Want to index by gene symbol column, not variable.
+
+# add gene_id back to tpm
+tpm <- tpm %>% rownames_to_column("gene_symbol") %>%
+  dplyr::mutate(gene_id = gene_id[gene_symbol]) 
+
+# reorder columns
+tpm <- tpm %>% dplyr::select(c(colnames(tpm)[1], colnames(tpm)[ncol(tpm)], colnames(tpm)[2:(ncol(tpm)-1)])) # reorder columns
+
+stopifnot("CAR" %in% tpm$gene_symbol)
+```
+
+```{r}
+# export with symbol and ID
+write_tsv(tpm, "~/processed_data/tpm_gene_symbol_id_dedup.tsv")
+
+# export with just symbol
+tpm_no_id <- tpm %>%
+  dplyr::select(-gene_id)
+write_tsv(tpm_no_id, "~/processed_data/tpm_gene_symbol_dedup.tsv")
+
+# needed for cibersort - first col gene, no other nonnumeric columns, no non-HGNC approved gene symbols. Remove geneID. Remove CAR. Rename gene symbol col to "Gene"
+tpm_no_id_no_CAR <- tpm_no_id %>%
+  dplyr::filter(!gene_symbol == "CAR")
+
+colnames(tpm_no_id_no_CAR)[1] <- "Gene" # rename col to "Gene" per cibersort instruction
+"CAR" %in% tpm_no_id_no_CAR$Gene # check CAR is absent
+write_tsv(tpm_no_id_no_CAR, "~/processed_data/cibersort/tpm_gene_symbol_dedup_no_CAR.txt")
+```
+

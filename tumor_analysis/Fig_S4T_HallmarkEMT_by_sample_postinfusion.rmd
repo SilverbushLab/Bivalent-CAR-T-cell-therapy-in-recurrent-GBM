@@ -1,0 +1,97 @@
+---
+title: "Fig_S4T_HallmarkEMT_by_sample_postinfusion"
+output: html_document
+date: "2026-02-17"
+---
+
+
+```{r}
+install.packages("msigdbr")
+library(devtools)
+install_github("alserglab/fgsea") # dependency for clusterprofiler
+
+devtools::install_github("YuLab-SMU/treeio")
+
+devtools::install_github("GuangchuangYu/ggtree") # dependency for enrichplot, which is a dependency for clusterProfiler
+BiocManager::install("clusterProfiler")
+```
+
+
+```{r}
+library(Seurat)
+library(tidyr)
+library(dplyr)
+library(tibble)
+library(readr)
+library(ggplot2)
+#library(ggnewscale)
+library(gghalves)
+library(ggpubr) # needs cmake
+library(scales)
+library(patchwork)
+library(stringr)
+library(forcats)
+library(cowplot)
+
+library(readxl)
+library(msigdbr)
+
+```
+
+
+# import data
+```{r}
+#srt <- readRDS("~/processed_data/tumors_normalized_scaled_dimreduction_annotated_refined_miller_srt_revision.rds")
+srt <- readRDS("/path/to/tumor/seurat/object")
+
+srt_malig <- subset(srt, subset = cell_type_final_no_program == "Malignant" )
+```
+
+
+# Plot genesets of interest by patient, timepoint - AddModuleScore
+```{r}
+hs_gsea_h <- msigdbr(species = "Homo sapiens", # change depending on species your data came from
+                      category = "H") %>% 
+  dplyr::select(gs_name, gene_symbol) # GSEA TERM2GENE param requireds df with geneset name and each gene symbol
+```
+
+```{r}
+# get Hallmark EMT score for malignant cells
+hallmark_emt <- hs_gsea_h %>%
+  dplyr::filter(gs_name == "HALLMARK_EPITHELIAL_MESENCHYMAL_TRANSITION") %>%
+  pull(gene_symbol)
+
+srt_malig <- AddModuleScore(srt_malig, features = list(hallmark_emt), name = "HALLMARK_EPITHELIAL_MESENCHYMAL_TRANSITION")
+colnames(srt_malig@meta.data)[ncol(srt_malig@meta.data)] <- "HALLMARK_EPITHELIAL_MESENCHYMAL_TRANSITION"
+```
+
+
+
+# Post-infusion enrichment of HALLMAR_EMT by dose class - AddModuleScore
+
+```{r}
+meta_post <- srt_malig@meta.data %>% 
+  dplyr::filter(timepoint == "Post") %>%
+  dplyr::mutate(dose_class =
+                  case_when(patient %in% c("P1", "P4", "P7") ~ "High Dose",
+                            patient %in% c("P13", "P14", "P16") ~ "Low Dose")
+                            )
+dim(meta_post)
+```
+
+```{r}
+meta_post$sample_name <- factor(meta_post$sample_name, levels = c("P1_Post", "P4_Post", "P7_Post", "P13_Post", "P14_Post", "P16_Post"))
+meta_post$dose_class <- factor(meta_post$dose_class, levels = c("Low Dose", "High Dose"))
+```
+
+```{r}
+p1 <- ggplot(meta_post, aes(x = sample_name, y = HALLMARK_EPITHELIAL_MESENCHYMAL_TRANSITION , fill = dose_class)) +
+  geom_violin() +
+  stat_summary(geom = "point", fun = "mean") +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 60, hjust =1 ))
+
+#ggsave("/your/path/AddModuleScore_HALLMARK_EMT_by_dose.pdf", width = 8, height = 4, plot = p1)
+p1
+```
+

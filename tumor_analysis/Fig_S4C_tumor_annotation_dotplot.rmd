@@ -1,0 +1,80 @@
+---
+title: "Fig_S4C_tumor_annotation_dotplot"
+output: html_document
+date: "2026-02-17"
+---
+
+
+```{r}
+library(Seurat)
+library(tidyr)
+library(ggplot2)
+library(ggpubr)
+library(dplyr)
+library(harmony)
+library(purrr)
+library(cowplot)
+library(rstatix)
+library(ggbeeswarm)
+library(ggbreak)
+```
+
+# Set up and adjust metadata
+```{r}
+srt_merge <- readRDS("/path/to/seurat/object")
+#srt_merge <- readRDS("~/processed_data/tumors_normalized_scaled_dimreduction_annotated_refined_miller_with_malig_states_srt_revision.rds")
+```
+
+
+```{r}
+# check metadata
+srt_merge$sample_name <- gsub("_", " ", srt_merge$sample_name) # remove underscore from sample name
+srt_merge$sample_name %>% table()
+srt_merge$patient %>% table()
+srt_merge$timepoint  %>% table()
+srt_merge$cell_type_final_no_program %>% table()
+#srt_merge$cell_type_final %>% table()
+```
+
+# 4) DotPlot Cell type markers by cell type
+Cell type annotations based on canonical lineage marker expression.
+
+```{r}
+# clean up dotplot data to remove malignant cells - these are identified by InferCNV
+srt_merge_dotplot <- subset(srt_merge, subset = cell_type_manual_refined != "Malignant")
+
+# combine cycling cells
+srt_merge_dotplot$cell_type_manual_refined[(srt_merge_dotplot$cell_type_manual_refined == "Cycling myeloid cell" 
+                                            | srt_merge_dotplot$cell_type_manual_refined == "Cycling lymphoid cell" )] <- "Cycling cell"
+
+srt_merge_dotplot$cell_type_manual_refined %>% table()
+
+# collapse myeloid cells to one group
+myeloid_types <- c("Macrophage", "Monocyte", "pDC")
+srt_merge_dotplot$cell_type_myeloid_collapse <- srt_merge_dotplot$cell_type_manual_refined
+srt_merge_dotplot$cell_type_myeloid_collapse <- as.character(srt_merge_dotplot$cell_type_myeloid_collapse)
+srt_merge_dotplot$cell_type_myeloid_collapse[srt_merge_dotplot$cell_type_myeloid_collapse %in% myeloid_types] <- "Myeloid"
+srt_merge_dotplot$cell_type_myeloid_collapse %>% table()
+
+# Define the desired cell type order
+desired_order <- c("Neuron", "Glial cell", "CD8 T cell", "CD4 T cell", "Regulatory T cell", "NK cell", "Plasma cell", "B cell", "Myeloid", "Endothelial", "Cycling cell")
+
+# check that the ordered cell types are identical to the values in metadata
+all(desired_order %in% unique(srt_merge_dotplot$cell_type_myeloid_collapse))
+all(unique(srt_merge_dotplot@meta.data$cell_type_myeloid_collapse) %in% desired_order)
+
+# Read in the marker list once
+markers_df <- read_csv("~/resources/cell_type_markers_forDotplot_refined_v2.csv")
+marker_genes <- unique(markers_df$marker)
+marker_genes <- factor(marker_genes, levels = marker_genes)
+
+srt_merge_dotplot$cell_type_myeloid_collapse <- factor(srt_merge_dotplot$cell_type_myeloid_collapse, levels = desired_order)
+```
+
+```{r, fig.width = 10, fig.height = 4, dpi = 180}
+plot <- DotPlot(srt_merge_dotplot,  features = marker_genes, group.by= 'cell_type_myeloid_collapse', dot.scale = 6, cluster.idents = FALSE) + RotatedAxis() +
+  scale_color_viridis_c(option = "D", name = "Mean scaled expression") 
+
+#ggsave("/path/to/cell_revisions_final/Tumor_fig_DotPlot_Markers.pdf", plot = plot, width = 12, height = 6, device = cairo_pdf())
+plot
+```

@@ -1,0 +1,120 @@
+---
+title: "Fig_3B_C_tumorcell_umap"
+output: html_document
+date: "2026-01-23"
+---
+
+# Set up and adjust metadata
+```{r}
+srt_merge <- readRDS("~/path/to/tumor/seurat/object")
+#srt_merge <- readRDS("~/processed_data/tumors_normalized_scaled_dimreduction_annotated_refined_miller_with_malig_states_srt_revision.rds")
+srt_merge$sample_name <- gsub("_", " ", srt_merge$sample_name) # remove underscore from sample name
+```
+
+
+```{r}
+# get cell counts for types and make new metadata column
+# Count number of cells per group
+cell_counts <- table(srt_merge$cell_type_final_no_program)
+
+# Create a named vector of labels with counts
+label_with_counts <- paste0(names(cell_counts), " (", cell_counts, ")")
+names(label_with_counts) <- names(cell_counts)
+label_with_counts
+
+# Add a new metadata column with those labels
+counted_cells <- label_with_counts[match(srt_merge$cell_type_final_no_program, names(label_with_counts))]
+names(counted_cells) <- colnames(srt_merge)
+srt_merge <- AddMetaData(srt_merge, metadata = counted_cells, col.name = "cell_type_with_counts")
+
+# check cell types with counts
+srt_merge$cell_type_with_counts %>% table()
+```
+
+
+```{r}
+# create custom cell colors
+named_colors_tumor <- c(
+  "Malignant (28127)"              = "#B22222",
+  "CD4 T cell (5938)"              = "#A6CEE3",
+  "CD8 T cell (8966)"              = "#B294C7",
+  "Cycling lymphoid cell (181)"    = "#C7B699",
+  "Regulatory T cell (678)"        = "#52AF43",
+  "NK cell (1279)"                 = "#E6CB75",
+  "Macrophage (9945)"              = "#4992C2",
+  "Monocyte (4254)"                = "#F68181",
+  "Neutrophil (2602)"              = "orange",
+  "cDC (4318)"                     = "#70449D",
+  "Cycling myeloid cell (42)"      = "#E6AB02",
+  "B cell (113)"                   = "lightgray",
+  "Plasma cell (69)"               = "#AADB84",
+  "Microglia (10432)"              = "#4DAF4A",
+  "Glial cell (20682)"             = "#984EA3",
+  "Neuron (798)"                   = "#377EB8",
+  "Endothelial (385)"              = "#FF69B4"
+)
+
+```
+
+```{r}
+patient_colors <- c(
+  "P1 Pre (15804)"    = "orange",  
+  "P1 Post (2605)"    = "#e97132", 
+  "P4 Pre (12345)"    = "lightgreen",  
+  "P4 Post (1554)"    = "#196b24",  
+  "P7 Pre (12826)"    = "#0f9ed5",  
+  "P7 Post (14133)"   = "#156082",
+  "P13 Pre (8663)"   = "purple",
+  "P13 Post (10278)"  = "#70449D",
+  "P14 Post (12620)"  = "firebrick3",
+  "P16 Post (7981)"   = "pink2"
+)
+```
+
+```{r}
+# get cell counts for samples and make new metadata column
+# Count number of cells per group
+cell_counts <- table(srt_merge$sample_name)
+# Create a named vector of labels with counts
+label_with_counts <- paste0(names(cell_counts), " (", cell_counts, ")")
+names(label_with_counts) <- names(cell_counts)
+label_with_counts
+# Add a new metadata column with those labels
+counted_cells <- label_with_counts[match(srt_merge$sample_name, names(label_with_counts))]
+names(counted_cells) <- colnames(srt_merge)
+
+srt_merge <- AddMetaData(srt_merge, metadata = counted_cells, col.name = "sample_name_with_counts")
+
+srt_merge$sample_name_with_counts %>% table()
+```
+
+```{r}
+# factor for order
+srt_merge$cell_type_with_counts <- factor(srt_merge$cell_type_with_counts,
+                                             levels = names(named_colors_tumor))
+
+srt_merge$sample_name_with_counts <- factor(srt_merge$sample_name_with_counts, 
+                                            levels = names(patient_colors))
+srt_merge$cell_type_with_counts %>% table()
+srt_merge$sample_name_with_counts %>% table()
+```
+
+
+# 2) all tumor cell UMAP - by cell type, sample
+Fig. 3B: UMAP of single-nucleus transcriptomes from matched pre- and post-treatment GBM tissues across three patients.
+```{r fig.width= 8, fig.height=6}
+
+plot1 <- DimPlot(srt_merge, group.by = "sample_name_with_counts", label = FALSE, raster = FALSE,
+                 cols = patient_colors) + 
+  ggtitle("Paired tumors pre and post CAR T cell infusion")
+
+plot2 <- DimPlot(srt_merge, group.by = "cell_type_with_counts", 
+                  cols = named_colors_tumor, raster = FALSE) +
+  ggtitle("Paired tumors pre and post CAR T cell infusion by cell type")
+
+#ggsave(filename = "/your/path/tumor_fig_Tumors_merged_UMAP_colored_by_sample.pdf", plot = plot1, width = 14, height = 10)
+#ggsave(filename = "/your/path/cell_revisions_final/tumor_fig_Tumors_merged_UMAP_colored_by_celltype_unifiedcols.pdf", plot = plot2, width = 14, height = 10)
+
+plot1
+plot2
+```

@@ -1,0 +1,211 @@
+---
+title: "Fig_S4S_HallmarkEMT_pval_by_malig_state"
+output: html_document
+date: "2026-02-17"
+---
+
+---
+title: "malig_DEG_findmarkers_GSEA_by_malig_states.rmd"
+output: html_document
+date: "2026-01-15"
+---
+
+
+```{r}
+library(clusterProfiler)
+library(enrichplot)
+
+library(Seurat)
+library(tidyr)
+library(dplyr)
+library(tibble)
+library(readr)
+library(ggplot2)
+library(ggnewscale)
+library(gghalves)
+library(ggpubr) # needs cmake
+library(scales)
+library(patchwork)
+library(stringr)
+library(forcats)
+
+library(presto)
+library(msigdbr)
+```
+
+# load data
+```{r}
+srt <- readRDS("/path/to/tumor/seurat/object")
+#srt <- readRDS("~/processed_data/tumors_normalized_scaled_dimreduction_annotated_refined_miller_with_malig_states_srt_revision.rds")
+Idents(srt) <- "timepoint"
+```
+
+```{r}
+# subset to malig cell state
+srt_AC <- subset(srt, subset = state == "AC")
+srt_MES <- subset(srt, subset = state == "MES")
+srt_OPC <- subset(srt, subset = state == "OPC")
+srt_NPC <- subset(srt, subset = state == "NPC")
+
+# ensure all cells are malignant
+stopifnot(all(srt_AC@meta.data$cell_type_final_no_program == "Malignant"))
+stopifnot(all(srt_MES@meta.data$cell_type_final_no_program == "Malignant"))
+stopifnot(all(srt_OPC@meta.data$cell_type_final_no_program == "Malignant"))
+stopifnot(all(srt_NPC@meta.data$cell_type_final_no_program == "Malignant"))
+```
+
+
+
+# run findmarkers - LR
+```{r}
+# run findmarkers with caution. each takes ~ 8 min. There is an option to save FindMarkers results below.
+
+deg_timepoint_AC <- FindMarkers(srt_AC, ident.1 = "Post", ident.2 = "Pre",
+                                  test.use = "LR",
+                                  min.pct = 0.2,
+                                  logfc.threshold = 0.25,
+                                  latent.vars = c("nCount_RNA")) %>%
+  rownames_to_column(var = "gene")
+
+deg_timepoint_MES <- FindMarkers(srt_MES, ident.1 = "Post", ident.2 = "Pre",
+                                  test.use = "LR",
+                                  min.pct = 0.2,
+                                  logfc.threshold = 0.25,
+                                  latent.vars = c("nCount_RNA")) %>%
+  rownames_to_column(var = "gene")
+
+deg_timepoint_OPC <- FindMarkers(srt_OPC, ident.1 = "Post", ident.2 = "Pre",
+                                  test.use = "LR",
+                                  min.pct = 0.2,
+                                  logfc.threshold = 0.25,
+                                  latent.vars = c("nCount_RNA")) %>%
+  rownames_to_column(var = "gene")
+
+deg_timepoint_NPC <- FindMarkers(srt_NPC, ident.1 = "Post", ident.2 = "Pre",
+                                  test.use = "LR",
+                                  min.pct = 0.2,
+                                  logfc.threshold = 0.25,
+                                  latent.vars = c("nCount_RNA")) %>%
+  rownames_to_column(var = "gene")
+```
+
+```{r}
+
+deg_timepoint_AC2 <- deg_timepoint_AC %>%
+  dplyr::mutate(signif = case_when(
+    avg_log2FC > 1 & p_val_adj < 0.05 ~ "signif_up",
+    avg_log2FC < -1 & p_val_adj < 0.05 ~ "signif_dn",
+    TRUE ~ "ns"
+  ))
+
+deg_timepoint_MES2 <- deg_timepoint_MES %>%
+  dplyr::mutate(signif = case_when(
+    avg_log2FC > 1 & p_val_adj < 0.05 ~ "signif_up",
+    avg_log2FC < -1 & p_val_adj < 0.05 ~ "signif_dn",
+    TRUE ~ "ns"
+  ))
+
+deg_timepoint_OPC2 <- deg_timepoint_OPC %>%
+  dplyr::mutate(signif = case_when(
+    avg_log2FC > 1 & p_val_adj < 0.05 ~ "signif_up",
+    avg_log2FC < -1 & p_val_adj < 0.05 ~ "signif_dn",
+    TRUE ~ "ns"
+  ))
+
+deg_timepoint_NPC2 <- deg_timepoint_NPC %>%
+  dplyr::mutate(signif = case_when(
+    avg_log2FC > 1 & p_val_adj < 0.05 ~ "signif_up",
+    avg_log2FC < -1 & p_val_adj < 0.05 ~ "signif_dn",
+    TRUE ~ "ns"
+  ))
+```
+
+```{r}
+# Save findmarkers results for checkpoint below
+write_tsv(deg_timepoint_AC2, "/your/path/results/malig_AC_findMarkers_logisticregression_PostvsPre_res.tsv")
+write_tsv(deg_timepoint_MES2, "/your/path/results/malig_MES_findMarkers_logisticregression_PostvsPre_res.tsv")
+write_tsv(deg_timepoint_OPC2, "/your/path/results/alig_OPC_findMarkers_logisticregression_PostvsPre_res.tsv")
+write_tsv(deg_timepoint_NPC2, "/your/path/results/malig_NPC_findMarkers_logisticregression_PostvsPre_res.tsv")
+```
+
+# ------ Checkpoint ---------
+
+```{r}
+# option to load FindMarkers results to save time on reruns.
+deg_timepoint_AC2 <- read_tsv("/your/path/results/malig_AC_findMarkers_logisticregression_PostvsPre_res.tsv")
+deg_timepoint_MES2 <- read_tsv("/your/path/results/malig_MES_findMarkers_logisticregression_PostvsPre_res.tsv")
+deg_timepoint_OPC2 <- read_tsv("/your/path/results/malig_OPC_findMarkers_logisticregression_PostvsPre_res.tsv")
+deg_timepoint_NPC2 <- read_tsv("/your/path/results/malig_NPC_findMarkers_logisticregression_PostvsPre_res.tsv")
+```
+
+
+# GSEA
+
+```{r}
+# pull hallmark genesets from msigdb Hallmark
+hs_gsea_h <- msigdbr(species = "Homo sapiens", # change depending on species your data came from
+                      category = "H") %>% 
+  dplyr::select(gs_name, gene_symbol) # GSEA TERM2GENE param requireds df with geneset name and each gene symbol
+```
+
+```{r}
+# define function to run GSEA
+runGSEA <- function(deg_df, logFC_col = "avg_log2FC", gene_col = "gene", term2gene, pval_cutoff = 0.05){
+  ranked_genes <- as.numeric(deg_df[[logFC_col]])
+  names(ranked_genes) <- as.character(deg_df[[gene_col]])
+  ranked_genes <- sort(ranked_genes, decreasing = TRUE)
+  
+  GSEA_res <- GSEA(ranked_genes, TERM2GENE = term2gene, verbose = TRUE, pvalueCutoff = pval_cutoff)
+  #GSEA_res_df <- as_tibble(GSEA_res@result)
+  
+  return(GSEA_res)
+}
+```
+
+
+```{r}
+set.seed(1234) # GSEA has some random elements. set seed.
+
+GSEA_res_H_AC <- runGSEA(deg_timepoint_AC2, term2gene = hs_gsea_h, pval_cutoff = 0.5)
+GSEA_res_H_MES <- runGSEA(deg_timepoint_MES2, term2gene = hs_gsea_h, pval_cutoff = 0.5)
+GSEA_res_H_NPC <- runGSEA(deg_timepoint_NPC2, term2gene = hs_gsea_h, pval_cutoff = 0.5)
+GSEA_res_H_OPC <- runGSEA(deg_timepoint_OPC2, term2gene = hs_gsea_h, pval_cutoff = 0.5)
+
+GSEA_res_H_AC_df <- GSEA_res_H_AC@result %>% as_tibble() %>% mutate(cell_state = "AC")
+GSEA_res_H_MES_df <- GSEA_res_H_MES@result %>% as_tibble() %>% mutate(cell_state = "MES")
+GSEA_res_H_NPC_df <- GSEA_res_H_NPC@result %>% as_tibble() %>% mutate(cell_state = "NPC")
+GSEA_res_H_OPC_df <- GSEA_res_H_OPC@result %>% as_tibble() %>% mutate(cell_state = "OPC")
+```
+
+# Enrichment of HALLMAR_EMT by malig cell state
+```{r}
+GSEA_res_all_df <- bind_rows(GSEA_res_H_AC_df, 
+                             GSEA_res_H_MES_df,
+                             GSEA_res_H_NPC_df,
+                             GSEA_res_H_OPC_df) %>%
+  dplyr::filter(ID == "HALLMARK_EPITHELIAL_MESENCHYMAL_TRANSITION")
+
+cellstate_colors <- c(
+  "AC"  = "#F3C623",
+  "MES" = "#C2352A",
+  "NPC" = "#2A5CAA",
+  "OPC" = "#4C8C3B"
+    )
+
+```
+
+```{r}
+p <- ggplot(GSEA_res_all_df, aes(x = cell_state, y = -log10(p.adjust), fill = cell_state)) +
+  geom_bar(stat = "identity") +
+  scale_fill_manual(values = cellstate_colors) +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed") +
+  labs(x = "",
+       y = "-log(BH-adjusted p-val, GSEA: Hallmark EMT)") +
+  theme_bw() +
+  theme(legend.position = "none")
+#ggsave("/your/path/DEG_analysis/malig_GSEA_findmarkers_HallmarkEMT_pval_by_cell_state.pdf", width = 5, height = 4, plot = p)
+p
+```
+
+
+

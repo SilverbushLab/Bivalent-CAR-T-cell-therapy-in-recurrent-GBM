@@ -1,0 +1,83 @@
+---
+title: "Treg_analysis"
+output: html_document
+date: "2026-01-04"
+---
+
+
+```{r}
+library(Seurat)
+library(tidyr)
+library(ggplot2)
+library(ggpubr)
+library(dplyr)
+library(harmony)
+library(purrr)
+library(cowplot)
+library(rstatix)
+library(ggbeeswarm)
+library(ggbreak)
+```
+
+```{r}
+srt_merge <- readRDS("~/path/to/seurat/object/")
+#srt_merge <- readRDS("~/processed_data/tumors_normalized_scaled_dimreduction_annotated_refined_miller_with_malig_states_srt_revision.rds")
+srt_merge$cell_type_final_no_program %>% table()
+```
+
+```{r}
+samples <- c("P1_Pre", "P1_Post", "P4_Pre", "P4_Post", "P7_Pre", "P7_Post", "P13_Pre", "P13_Post")
+immune <- c( "Neutrophil", "Macrophage", "Microglia", "Monocyte", "cDC", "Cycling myeloid cell", "Cycling lymphoid cell",  "CD4 T cell", "Regulatory T cell", "NK cell", "CD8 T cell", "B cell")
+
+srt_immune <- subset(srt_merge, subset = sample_name %in% samples)
+srt_immune <- subset(srt_immune, subset = cell_type_final_no_program %in% immune)
+
+```
+
+```{r}
+# calculate Treg fraction changes 
+meta <- srt_immune@meta.data
+composition_df <- meta %>% group_by(sample_name) %>%
+  summarize(total_cells = n(),
+            num_Treg = sum(cell_type_final_no_program == "Regulatory T cell"),
+            fraction_Treg = num_Treg/total_cells)
+  
+composition_df$patient <- word(composition_df$sample_name, start = 1L, sep = "_")
+composition_df$timepoint <- word(composition_df$sample_name, start = 2L, sep = "_")
+
+diff_df <- composition_df %>% 
+  select(patient, timepoint, fraction_Treg) %>%
+  pivot_wider(names_from = timepoint, values_from = fraction_Treg) %>%
+  mutate(delta_fraction = Post - Pre,
+         delta_log2ratio = log2(Post/Pre))
+
+diff_df$patient <- factor(diff_df$patient, levels = c("P13", "P7", "P4", "P1")) 
+```
+
+# Plot
+```{r}
+# plot
+  p2 <- ggplot(data = diff_df, aes(x = delta_log2ratio, y = patient, fill = delta_log2ratio > 0)) +
+    geom_col() +
+    geom_vline(xintercept = 0, linetype = "solid", color = "black") +
+    scale_fill_manual(values = c("TRUE" = "firebrick3", "FALSE" = "navy"), guide = "none") +
+    labs(
+      x = "Change in fraction of Tregs (log2(Post/Pre))",
+      y = "Patient"
+    ) +
+    theme_bw() +
+    theme(axis.text = element_text(size = 12),
+          axis.title = element_text(size = 14))
+#ggsave("/your/path/Treg_fraction_change_horizontal_bar_paired_logratio.pdf", width = 8, height = 4, plot = p2)
+  p2                                                                                                     
+                                                                                                    
+```
+
+
+
+```{r}
+wilcox.test(diff_df$Post, diff_df$Pre, paired = TRUE)
+compare_means(fraction_Treg ~ timepoint, composition_df, method = "wilcox.test", paired = TRUE)
+```
+
+

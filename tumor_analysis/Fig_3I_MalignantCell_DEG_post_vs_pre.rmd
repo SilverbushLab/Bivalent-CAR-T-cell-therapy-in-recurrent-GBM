@@ -1,0 +1,202 @@
+---
+title: "Fig_3I_MalignantCell_DEG_post_vs_pre"
+output: html_document
+date: "2026-02-17"
+---
+
+---
+title: "Fig_S4R_Malig_cells_GSEA_Hallmark"
+output: html_document
+date: "2026-02-17"
+---
+
+
+```{r}
+library(devtools)
+install_github("alserglab/fgsea") # dependency for clusterprofiler
+remotes::install_version("yulab.utils", version = "0.2.3") # dependency for ggtree
+devtools::install_github("GuangchuangYu/ggtree") # dependency for enrichplot, which is a dependency for clusterProfiler
+
+install.packages("gprofiler2")
+BiocManager::install("clusterProfiler")
+install.packages('msigdbr')
+```
+
+
+```{r}
+library(clusterProfiler)
+
+library(Seurat)
+library(tidyr)
+library(dplyr)
+library(tibble)
+library(readr)
+library(ggplot2)
+library(ggnewscale)
+library(gghalves)
+library(ggpubr) # needs cmake
+library(scales)
+library(patchwork)
+library(stringr)
+library(forcats)
+library(ggrepel)
+
+library(presto)
+library(msigdbr)
+```
+
+
+# load data
+```{r}
+#srt <- readRDS("~/processed_data/tumors_normalized_scaled_dimreduction_annotated_refined_miller_with_malig_states_srt_revision.rds")
+srt <- readRDS("/path/to/tumor/seurat/object")
+srt_malig <- subset(srt, subset = cell_type_final_no_program == "Malignant")
+Idents(srt_malig) <- "timepoint"
+```
+
+# run findmarkers
+```{r}
+# run findmarkers with caution. takes > 15 min.
+
+deg_timepoint_LR <- FindMarkers(srt_malig, ident.1 = "Post", ident.2 = "Pre",
+                                  test.use = "LR",
+                                  min.pct = 0.2,
+                                  logfc.threshold = 0.25,
+                                  latent.vars = c("nCount_RNA")) %>%
+  rownames_to_column(var = "gene")
+
+
+deg_timepoint_LR2 <- deg_timepoint_LR %>%
+  dplyr::mutate(signif = case_when(
+    avg_log2FC > 1 & p_val_adj < 0.05 ~ "signif_up",
+    avg_log2FC < -1 & p_val_adj < 0.05 ~ "signif_dn",
+    TRUE ~ "ns"
+  ))
+
+```
+
+
+```{r}
+write_tsv(deg_timepoint_LR2, "~/your/path/malig_findMarkers_logisticregression_PostvsPre_res.tsv")
+```
+
+# <------- Restart here
+
+# Volcano plot
+```{r}
+highlight_map <- c(
+  # A. Lineage Remodeling
+  "TWIST2" = "Mesenchymal shift",
+  "TWIST1" = "Mesenchymal shift",
+  "CD44"   = "Mesenchymal shift",
+  "NF1"  = "Mesenchymal shift",
+
+  # B. Physical Barrier
+  "POSTN" = "Physical barrier",
+  "PCOLCE"  = "Physical barrier",
+  "COL6A2" = "Physical barrier",
+
+  # C. Metabolic Armor
+  "HIF1A"   = "Metabolic Armor",
+  "VEGFA"  = "Metabolic Armor",
+  "SLC16A1"  = "Metabolic Armor"
+)
+
+highlight_colors <- c(
+  "Mesenchymal shift"   = "#7B3294",  # deep purple (cell state)
+  "Physical barrier"     = "#008837",  # fibrotic green
+  "Metabolic Armor" = "#E08214"  # hypoxia / metabolism amber
+)
+```
+
+
+```{r}
+# read deg data back in to skip FindMarkers
+deg_timepoint_LR2 <- read_tsv("~/results/DEG_analysis/malig_findMarkers_logisticregression_PostvsPre_res.tsv")
+#deg_timepoint_LR2 <- read_tsv("~/your/path/malig_findMarkers_logisticregression_PostvsPre_res.tsv")
+```
+
+
+```{r}
+top_genes_LR <- deg_timepoint_LR2 %>% 
+  dplyr::arrange(desc(avg_log2FC), p_val_adj) %>%
+  slice_head(n = 10) %>%
+  pull(gene)
+
+min_nonzero_pval <- min( deg_timepoint_LR2$p_val_adj[deg_timepoint_LR2$p_val_adj > 0]) # calculate lowest nonzero pval
+deg_timepoint_LR3 <- deg_timepoint_LR2 %>%
+  mutate(
+    highlight_group = highlight_map[gene],
+    highlight_group = ifelse(is.na(highlight_group), NA, highlight_group),
+    label_gene = if_else(!is.na(highlight_group), gene, NA_character_),
+    top_gene = if_else(gene %in% top_genes_LR, gene, NA)
+  ) %>%
+    mutate(
+      p_val_adj_plot = ifelse(p_val_adj == 0, min_nonzero_pval, p_val_adj)) # if p value is approximated to zero. set it instead to the smallest recoreded nonzero pval to avoid infs.
+
+```
+
+```{r}
+p <- ggplot(deg_timepoint_LR3, aes(x = avg_log2FC, y = -log10(p_val_adj_plot))) +
+
+  # Base volcano
+  geom_point(aes(color = signif), alpha = 0.6, size = 1.5) +
+
+  # Highlighted genes (colored by category)
+  geom_point(
+    data = subset(deg_timepoint_LR3, !is.na(highlight_group)),
+    aes(fill = highlight_group),
+    shape = 21,
+    color = "black",
+    size = 3.5,
+    stroke = 0.4
+  ) +
+
+  # Labels
+  geom_text_repel(
+    aes(label = label_gene),
+    size = 3,
+    box.padding = 0.35,
+    point.padding = 0.3,
+    max.overlaps = Inf,
+    segment.color = "grey50"
+  ) +
+
+  # Thresholds
+  geom_vline(xintercept = c(-1, 1), linetype = "dashed") +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed") +
+
+  # Scales
+  scale_color_manual(
+    values = c(
+      "signif_up" = "firebrick3",
+      "signif_dn" = "navy",
+      "ns" = "gray70"
+    ),
+    name = "DE significance"
+  ) +
+
+  scale_fill_manual(
+    values = highlight_colors,
+    name = "Highlighted programs"
+  ) +
+
+  labs(
+    x = "log2 Fold Change (Post vs Pre)",
+    y = "-log10 adjusted p-value",
+    title = "DEGs, malignant cells, Seurat::FindMarkers - Log. Reg."
+  ) +
+  scale_y_continuous(
+    expand = expansion(mult = c(0, 0.08))  # bottom, top
+  ) +
+  theme_bw() +
+  theme(
+    legend.position = "right",
+    panel.grid = element_blank()
+  )
+#ggsave("/your/path/volcanoplot_with_genes_of_interest_findmarkers_LR.jpg", width = 7, height = 4, plot = p)
+
+p
+```
+
+

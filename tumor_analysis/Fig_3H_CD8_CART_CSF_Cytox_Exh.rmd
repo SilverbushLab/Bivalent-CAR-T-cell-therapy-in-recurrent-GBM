@@ -1,0 +1,105 @@
+---
+title: "Fig_3H_CD8_CART_CSF_Cytox_Exh"
+output: html_document
+date: "2026-02-17"
+---
+
+
+```{r}
+library(Seurat)
+library(tidyr)
+library(ggplot2)
+library(ggpubr)
+library(dplyr)
+library(harmony)
+library(purrr)
+library(cowplot)
+library(rstatix)
+library(ggbeeswarm)
+library(ggbreak)
+```
+
+# 8) Import CSF data and compute Cytotoxicity and Exhaustion scores
+```{r}
+sample_colors = c("P1D7" = "#e97132", P7D7 = "#0f9ed5", "P13D7" = "purple1", "P4D7" = "#196b24")
+srt_csf <- readRDS("~/external_resources/CSF_scData/all_csf_annotated_final.rds") 
+srt_csf_CAR_CD8 <- srt_csf %>%
+  subset(subset = cell_type_level3 == "CD8+ CAR T") %>%
+  subset(subset = sample_id %in% names(sample_colors))
+dim(srt_csf_CAR_CD8)
+
+# read in and format signature
+#sigs <- read_csv("~/external_resources/wherry_pace_yost_signatures.csv")
+sigs <- read_csv("~/path/to/wherry_pace_yost_signatures.csv")
+
+markers <- list("Pace effector markers" = sigs$Pace_effector_markers[!is.na(sigs$Pace_effector_markers)],
+                              "Yost exhaustion markers" = sigs$Yost_exhaustion_markers[!is.na(sigs$Yost_exhaustion_markers)])
+
+
+srt_csf_CAR_CD8 <- AddModuleScore(srt_csf_CAR_CD8,
+                                features = markers)
+
+srt_csf_CAR_CD8$sample_id <- factor(srt_csf_CAR_CD8$sample_id, levels = names(sample_colors))
+
+meta <- srt_csf_CAR_CD8@meta.data 
+colnames(meta)[colnames(meta) == "Cluster1"] = "Pace effector markers"
+colnames(meta)[colnames(meta) == "Cluster2"] = "Yost exhaustion markers"
+
+# check
+srt_csf_CAR_CD8$cell_type_level3 %>% table()
+srt_csf_CAR_CD8$sample_id %>% table()
+```
+
+# Plot
+```{r}
+
+meta$sample_id <- factor(meta$sample_id, levels = names(sample_colors))
+
+comparisons_list <- list(c("P1D7", "P4D7"), 
+                         c("P1D7", "P13D7"), 
+                         c("P7D7", "P4D7"),
+                         c("P7D7", "P13D7"))
+
+# plot effector markers - D7 only
+plot1 <- ggplot(data = meta, aes(x = sample_id, y = `Pace effector markers`, fill = sample_id)) +
+  geom_violin() + 
+  scale_fill_manual(values = sample_colors) +
+  stat_summary(fun = mean, geom = "crossbar", width = 0.75, color = "black", fatten = 1) + 
+  stat_compare_means(comparisons = comparisons_list, 
+                     method = "wilcox.test",
+                     label = "p.format", 
+                     hide.ns = TRUE) +
+  theme_bw() +
+  labs(title = "CD8 CAR T-D7",
+       subtitle = "Pace Effector",
+       x = "Pace Effector Markers expression") +
+  theme(panel.grid = element_blank(),
+        axis.title.x = element_blank(),
+        legend.position = "none")
+
+# plot exhaustion markers - D7 only
+plot2 <- ggplot(data = meta, aes(x = sample_id, y = `Yost exhaustion markers`, fill = sample_id)) +
+  geom_violin() + 
+  scale_fill_manual(values = sample_colors) +
+  stat_summary(fun = mean, geom = "crossbar", width = 0.75, color = "black", fatten = 1) +  
+  stat_compare_means(comparisons = comparisons_list, 
+                     method = "wilcox.test",
+                     label = "p.format", 
+                     hide.ns = TRUE) +
+  theme_bw() +
+  labs(title = "CD8 CAR T-D7",
+       subtitle = "Yost Exhaustion",
+       x = "Yost exhaustion marker expression") +
+  theme(panel.grid = element_blank(),
+        axis.title.x = element_blank(),
+        legend.position = "none")
+
+
+#ggsave("~/your/path/CSF_CD8_CAR_Tcells_D7_Pace_effector_markers.pdf", plot = plot1, width = 7, height = 5)
+#ggsave("~/your/path/CSF_CD8_CAR_D7_Yost_exhaustion_markers.pdf", plot = plot2, width = 7, height = 5)
+plot1
+plot2
+```
+
+
+
