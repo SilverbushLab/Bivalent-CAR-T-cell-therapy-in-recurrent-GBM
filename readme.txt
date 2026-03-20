@@ -1,4 +1,4 @@
-Welcome to the Silverbush Lab Github page containing code for data exploration and figure reproduction from our manuscript "The critical role of the host immune environment in GBM CAR T cell therapy".
+Welcome to the Silverbush Lab Github page containing code for data exploration and figure reproduction from our manuscript "The critical role of the host endogenous immune compartment after intracerebroventricular CAR T cell therapy in recurrent GBM".
 
 Data availability
 
