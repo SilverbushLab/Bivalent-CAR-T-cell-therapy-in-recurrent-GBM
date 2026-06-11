@@ -20,8 +20,7 @@ library(ggbreak)
 ```
 
 ```{r}
-srt_merge <- readRDS("~/path/to/seurat/object/")
-#srt_merge <- readRDS("~/processed_data/tumors_normalized_scaled_dimreduction_annotated_refined_miller_with_malig_states_srt_revision.rds")
+srt_merge <- readRDS("~/processed_data/tumors_normalized_scaled_dimreduction_annotated_refined_miller_with_malig_states_srt_revision.rds")
 srt_merge$cell_type_final_no_program %>% table()
 ```
 
@@ -35,7 +34,11 @@ srt_immune <- subset(srt_immune, subset = cell_type_final_no_program %in% immune
 ```
 
 ```{r}
-# calculate Treg fraction changes 
+srt_immune$sample_name %>% table()
+srt_immune$cell_type_final_no_program %>% table()
+```
+
+```{r}
 meta <- srt_immune@meta.data
 composition_df <- meta %>% group_by(sample_name) %>%
   summarize(total_cells = n(),
@@ -54,10 +57,8 @@ diff_df <- composition_df %>%
 diff_df$patient <- factor(diff_df$patient, levels = c("P13", "P7", "P4", "P1")) 
 ```
 
-# Plot
 ```{r}
-# plot
-  p2 <- ggplot(data = diff_df, aes(x = delta_log2ratio, y = patient, fill = delta_log2ratio > 0)) +
+p <- ggplot(data = diff_df, aes(x = delta_log2ratio, y = patient, fill = delta_log2ratio > 0)) +
     geom_col() +
     geom_vline(xintercept = 0, linetype = "solid", color = "black") +
     scale_fill_manual(values = c("TRUE" = "firebrick3", "FALSE" = "navy"), guide = "none") +
@@ -68,16 +69,6 @@ diff_df$patient <- factor(diff_df$patient, levels = c("P13", "P7", "P4", "P1"))
     theme_bw() +
     theme(axis.text = element_text(size = 12),
           axis.title = element_text(size = 14))
-#ggsave("/your/path/Treg_fraction_change_horizontal_bar_paired_logratio.pdf", width = 8, height = 4, plot = p2)
-  p2                                                                                                     
-                                                                                                    
+
+p
 ```
-
-
-
-```{r}
-wilcox.test(diff_df$Post, diff_df$Pre, paired = TRUE)
-compare_means(fraction_Treg ~ timepoint, composition_df, method = "wilcox.test", paired = TRUE)
-```
-
-
